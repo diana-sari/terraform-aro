@@ -1,5 +1,7 @@
 # Summary
 
+> **Deprecated for this repository’s root module:** When `enable_managed_identities = true`, the root stack uses `reference/aro-azapi` plus `modules/aro-cluster-azapi` instead of this module. This tree is kept for reference, migration notes, or other callers that still source it directly.
+
 This Terraform module provides Azure permissions needed to install and manage ARO clusters using **managed identities** (preview feature).
 Managed identities eliminate the need to manage service principal credentials and provide enhanced security for ARO cluster operations.
 

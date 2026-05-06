@@ -21,8 +21,8 @@ resource "azurerm_redhat_openshift_cluster" "cluster" {
   provider = azurerm.installer
 
   name                = var.cluster_name
-  location            = azurerm_resource_group.main.location
-  resource_group_name = azurerm_resource_group.main.name
+  location            = module.aro_network.location
+  resource_group_name = module.aro_network.resource_group_name
   tags                = var.tags
 
   lifecycle {
@@ -35,16 +35,16 @@ resource "azurerm_redhat_openshift_cluster" "cluster" {
     pull_secret = local.pull_secret
     version     = local.aro_version
 
-    managed_resource_group_name = "${azurerm_resource_group.main.name}-managed"
+    managed_resource_group_name = "${module.aro_network.resource_group_name}-managed"
   }
 
   main_profile {
     vm_size   = var.main_vm_size
-    subnet_id = azurerm_subnet.control_plane_subnet.id
+    subnet_id = module.aro_network.control_plane_subnet_id
   }
 
   worker_profile {
-    subnet_id    = azurerm_subnet.machine_subnet.id
+    subnet_id    = module.aro_network.machine_subnet_id
     disk_size_gb = var.worker_disk_size_gb
     node_count   = var.worker_node_count
     vm_size      = var.worker_vm_size
@@ -71,149 +71,61 @@ resource "azurerm_redhat_openshift_cluster" "cluster" {
     client_secret = module.aro_permissions[0].cluster_service_principal_client_secret
   }
 
-  # Note: No explicit depends_on for modules - implicit dependency via service_principal block above
-  #       Destroy order is managed via terraform_data.cluster_destroy_guard_sp in 20-iam.tf
+  # Implicit dependency on module.aro_permissions via service_principal; destroy removes cluster before IAM cleanup
   depends_on = [
-    azurerm_firewall_network_rule_collection.firewall_network_rules,
+    module.aro_network,
   ]
 }
 
-# ARO Cluster - Managed Identity deployment (preview feature)
-# Uses ARM template because azurerm_redhat_openshift_cluster doesn't yet support managed identities
-# NOTE: Destroy order: Cluster must be deleted BEFORE modules (managed identities)
-#       Terraform handles this automatically via implicit dependencies, but if destroy fails,
-#       manually delete cluster first: terraform destroy -target=azurerm_resource_group_template_deployment.cluster_managed_identity
-resource "azurerm_resource_group_template_deployment" "cluster_managed_identity" {
+# ARO Cluster - Managed identity + platform workload identities (AzAPI)
+# Vendored pattern: reference/aro-azapi + modules/aro-cluster-azapi (outbound_type parity with SP path)
+module "aro_cluster_azapi" {
   count = var.enable_managed_identities ? 1 : 0
 
-  name                = "${var.cluster_name}-managed-identity"
-  resource_group_name = azurerm_resource_group.main.name
-  deployment_mode     = "Incremental"
-  template_content    = file("${path.module}/templates/aro-cluster-managed-identity.json")
+  source = "./modules/aro-cluster-azapi"
 
-  parameters_content = jsonencode({
-    clusterName = {
-      value = var.cluster_name
-    }
-    location = {
-      value = azurerm_resource_group.main.location
-    }
-    resourceGroupName = {
-      value = azurerm_resource_group.main.name
-    }
-    managedResourceGroupName = {
-      value = "${azurerm_resource_group.main.name}-managed"
-    }
-    domain = {
-      value = local.domain
-    }
-    pullSecret = {
-      value = local.pull_secret != null ? local.pull_secret : ""
-    }
-    version = {
-      value = local.aro_version
-    }
-    podCidr = {
-      value = var.aro_pod_cidr_block
-    }
-    serviceCidr = {
-      value = var.aro_service_cidr_block
-    }
-    masterVmSize = {
-      value = var.main_vm_size
-    }
-    masterSubnetId = {
-      value = azurerm_subnet.control_plane_subnet.id
-    }
-    workerVmSize = {
-      value = var.worker_vm_size
-    }
-    workerDiskSizeGB = {
-      value = var.worker_disk_size_gb
-    }
-    workerNodeCount = {
-      value = var.worker_node_count
-    }
-    workerSubnetId = {
-      value = azurerm_subnet.machine_subnet.id
-    }
-    apiServerVisibility = {
-      value = var.api_server_profile
-    }
-    ingressVisibility = {
-      value = var.ingress_profile
-    }
-    outboundType = {
-      value = var.outbound_type
-    }
-    managedIdentityAroServiceId = {
-      value = local.managed_identity_ids["aro-service"]
-    }
-    managedIdentityCloudControllerManagerId = {
-      value = local.managed_identity_ids["cloud-controller-manager"]
-    }
-    managedIdentityCloudNetworkConfigId = {
-      value = local.managed_identity_ids["cloud-network-config"]
-    }
-    managedIdentityClusterId = {
-      value = local.managed_identity_ids["cluster"]
-    }
-    managedIdentityDiskCsiDriverId = {
-      value = local.managed_identity_ids["disk-csi-driver"]
-    }
-    managedIdentityFileCsiDriverId = {
-      value = local.managed_identity_ids["file-csi-driver"]
-    }
-    managedIdentityImageRegistryId = {
-      value = local.managed_identity_ids["image-registry"]
-    }
-    managedIdentityIngressId = {
-      value = local.managed_identity_ids["ingress"]
-    }
-    managedIdentityMachineApiId = {
-      value = local.managed_identity_ids["machine-api"]
-    }
-    managedIdentityAroServicePrincipalId = {
-      value = local.managed_identity_principal_ids["aro-service"]
-    }
-    managedIdentityCloudControllerManagerPrincipalId = {
-      value = local.managed_identity_principal_ids["cloud-controller-manager"]
-    }
-    managedIdentityCloudNetworkConfigPrincipalId = {
-      value = local.managed_identity_principal_ids["cloud-network-config"]
-    }
-    managedIdentityDiskCsiDriverPrincipalId = {
-      value = local.managed_identity_principal_ids["disk-csi-driver"]
-    }
-    managedIdentityFileCsiDriverPrincipalId = {
-      value = local.managed_identity_principal_ids["file-csi-driver"]
-    }
-    managedIdentityImageRegistryPrincipalId = {
-      value = local.managed_identity_principal_ids["image-registry"]
-    }
-    managedIdentityIngressPrincipalId = {
-      value = local.managed_identity_principal_ids["ingress"]
-    }
-    managedIdentityMachineApiPrincipalId = {
-      value = local.managed_identity_principal_ids["machine-api"]
-    }
-    tags = {
-      value = var.tags
-    }
-  })
+  cluster_name                = var.cluster_name
+  resource_group_name         = module.aro_network.resource_group_name
+  managed_resource_group_name = "${module.aro_network.resource_group_name}-managed"
+  location                    = module.aro_network.location
+  tags                        = var.tags
 
-  # Note: No explicit depends_on for modules - implicit dependency via managed_identity_ids in parameters
-  #       Destroy order is managed via terraform_data.cluster_destroy_guard_mi in 20-iam.tf
-  depends_on = [
-    azurerm_firewall_network_rule_collection.firewall_network_rules,
-  ]
+  domain        = local.domain
+  aro_version   = local.aro_version
+  pull_secret   = coalesce(local.pull_secret, "")
+  outbound_type = var.outbound_type
 
-  lifecycle {
-    # Ensure cluster is replaced before dependent resources during updates
-    create_before_destroy = false
-    # Ignore changes to parameters_content to prevent updates that trigger immutable property errors
-    # Tags and other properties can be updated directly via Azure CLI if needed
-    # This prevents Terraform from trying to update resourceGroupId which is immutable
-    ignore_changes = [parameters_content]
+  api_server_visibility = var.api_server_profile
+  ingress_visibility    = var.ingress_profile
+
+  # Must match modules/aro-network: subnet NSG associations are skipped when
+  # enable_managed_identities is true. Preconfigured NSG requires NSGs on both
+  # master and worker subnets before install (InvalidLinkedVNet otherwise).
+  preconfigured_nsg = "Disabled"
+
+  control_plane_subnet_id = module.aro_network.control_plane_subnet_id
+  compute_subnet_id       = module.aro_network.machine_subnet_id
+  control_plane_vm_size   = var.main_vm_size
+  compute_vm_size         = var.worker_vm_size
+  compute_vm_disk_size    = var.worker_disk_size_gb
+  compute_node_count      = var.worker_node_count
+
+  pod_cidr     = var.aro_pod_cidr_block
+  service_cidr = var.aro_service_cidr_block
+
+  cluster_msi_resource_id      = module.aro_mi_identities[0].identity_resource_ids["cluster_msi"]
+  platform_workload_identities = local.mi_platform_workload_identities
+
+  timeouts = {
+    create = "90m"
+    delete = "20m"
   }
+
+  # Entire modules are listed so depends_on stays a static list (see Terraform constraints on depends_on).
+  # Only one of the RBAC modules has count = 1 when managed identities are enabled; the other has count = 0.
+  depends_on = [
+    module.aro_network,
+    module.aro_mi_rbac,
+    module.aro_mi_rbac_legacy_network,
+  ]
 }

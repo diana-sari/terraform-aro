@@ -3,5 +3,32 @@
 .terraform*
 *.plan
 terraform.tfvars
+
+# Upstream snapshots (clone with scripts/sync-reference.sh; see README / CONTRIBUTING)
+/reference/
+# Written when modules/aro-permissions has output_as_file = true (see 20-iam.tf)
+*_cluster-sp-credentials.txt
+*_installer-sp-credentials.txt
 sshuttle.pid
 .history
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors / local tooling
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Environment and secrets (never commit real values)
+.env
+.env.*
+!.env.example
+
+# Logs and caches
+*.log
+.cache/
+tmp/

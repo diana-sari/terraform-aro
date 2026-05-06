@@ -1,0 +1,31 @@
+# Git and IDE
+.git
+.github
+.cursor
+.agents
+.idea
+.vscode
+
+# Terraform local state and secrets
+.terraform
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfvars
+!terraform.tfvars.example
+*.plan
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Gitignored upstream snapshots (may exist locally; keep out of image context)
+reference/
+
+# OS and misc
+.DS_Store
+Thumbs.db
+*.log
+.history

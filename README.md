@@ -4,6 +4,13 @@ Azure Red Hat OpenShift (ARO) is a fully-managed turnkey application platform.
 
 Supports Public ARO clusters and Private ARO clusters.
 
+## Community
+
+- [Contributing](CONTRIBUTING.md)
+- [Code of Conduct](CODE_OF_CONDUCT.md)
+- [Security policy](SECURITY.md)
+- [License](LICENSE)
+
 ## Setup
 
 Using the code in the repo will require having the following tools installed:
@@ -15,6 +22,15 @@ Using the code in the repo will require having the following tools installed:
 Optional tools (for enhanced testing):
 - tflint (for Terraform linting)
 - checkov (for security scanning)
+- git (for `make reference-sync`)
+
+**Managed identities:** `reference/` is not tracked in git. Before `make init`, `make pr`, or `make create*`, populate it with the upstream module snapshot your environment documents:
+
+```bash
+REFERENCE_ARO_AZAPI_URL=https://github.com/your-org/terraform-aro-reference-aro-azapi.git make reference-sync
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for CI variables (`REFERENCE_ARO_AZAPI_URL`) and optional knobs (`REFERENCE_SYNC_AVM`, branch refs).
 
 ## Create the ARO cluster and required infrastructure
 
@@ -48,6 +64,8 @@ Optional tools (for enhanced testing):
    make create-private
    ```
 
+   **Jumphost SSH keys:** If `jumphost_ssh_public_key_path` and `jumphost_ssh_private_key_path` are both unset (`null`), Terraform generates an ED25519 keypair for the VM and publishes sensitive outputs `jumphost_ssh_private_key_openssh` and `jumphost_ssh_public_key_openssh` (material lives in state). To use keys from disk instead, set **both** paths; the private key must be **unencrypted** (provisioners do not support passphrase-protected keys).
+
    >NOTE: restrict_egress_traffic=true will secure ARO cluster by routing [Egress traffic through an Azure Firewall](https://learn.microsoft.com/en-us/azure/openshift/howto-restrict-egress).
 
    >NOTE2: Private Clusters can be created [without Public IP using the UserDefineRouting](https://learn.microsoft.com/en-us/azure/openshift/howto-create-private-cluster-4x#create-a-private-cluster-without-a-public-ip-address) flag in the outboundtype=UserDefineRouting variable. By default LoadBalancer is used for the egress.
@@ -57,10 +75,10 @@ Optional tools (for enhanced testing):
 Azure Red Hat OpenShift supports managed identities (currently in tech preview) as an alternative to service principals. Managed identities provide enhanced security by eliminating the need to manage credentials.
 
 **Important Notes:**
-- This feature is currently in **tech preview** and not recommended for production use
-- Managed identities require ARM template deployment (the `azurerm_redhat_openshift_cluster` resource doesn't yet support managed identities)
-- The aro-permissions module automatically creates 9 managed identities when enabled
-- Existing clusters using service principals cannot be migrated to managed identities
+- This feature is currently in **tech preview** and not recommended for production use without your own validation
+- Managed identity clusters use **AzAPI** and modules under `reference/aro-azapi` (not `azurerm_redhat_openshift_cluster`)
+- Nine user-assigned identities and RBAC are created by those reference modules when `enable_managed_identities = true`
+- Existing clusters using service principals cannot be migrated to managed identities in place
 
 **To enable managed identities:**
 
@@ -91,13 +109,16 @@ make create-private-managed-identity
    ```
 
 When `enable_managed_identities = true`:
-- The aro-permissions module creates 9 user-assigned managed identities
-- Role assignments are automatically configured for network resources
-- The cluster is deployed via ARM template with `platformWorkloadIdentityProfile` configuration
-- All cluster outputs work the same way as service principal deployments
+- `reference/aro-azapi/modules/managed_identity` creates nine user-assigned identities (including cluster MSI)
+- RBAC defaults to `reference/aro-azapi/modules/aro_role_assignments` when `mi_use_builtin_operator_roles = true` (built-in ARO operator / network roles). Set `mi_use_builtin_operator_roles = false` to use `modules/aro-mi-rbac-legacy-network` instead (optional `mi_minimal_network_role` for custom network roles—see variable descriptions in `01-variables.tf`).
+- `modules/aro-cluster-azapi` deploys the cluster with `platformWorkloadIdentityProfile` via AzAPI
+- Outputs mirror the service-principal path (console/API URLs; IPs when exposed on the cluster resource)
 
-**Known Limitations:**
-- **Network Security Groups (NSGs):** Managed identity clusters currently cannot have NSGs attached to the control plane and worker subnets. The NSG resource is still created (required for managed identity permissions), but it is not associated with the subnets. This is a current limitation of the managed identity preview feature. For production deployments requiring NSG protection, consider using service principal-based deployments until this limitation is resolved.
+**Networking:** With managed identities, `10-network.tf` does not attach the BYO NSG to cluster subnets (`azurerm_subnet_network_security_group_association` count is 0). The AzAPI cluster therefore uses `preconfiguredNSG` **Disabled** so install matches subnet state. The service-principal path keeps subnet NSG associations and `preconfigured_network_security_group_enabled = true`.
+
+**UDR:** `outbound_type = "UserDefinedRouting"` requires `restrict_egress_traffic = true` (validated at plan time) so the firewall route table and RBAC match what the cluster expects.
+
+**Terraform vs cluster updates (AzAPI):** The vendored `modules/aro-cluster-azapi` resource uses `lifecycle.ignore_changes` on the request body (same pattern as the upstream reference) so routine API drift and secrets do not force destructive updates. Many cluster property changes will therefore not be applied by a subsequent `terraform apply`; treat substantive changes as replace workflows or out-of-band updates per Microsoft guidance.
 
 For more information, see the [Microsoft documentation on ARO managed identities](https://learn.microsoft.com/en-us/azure/openshift/howto-create-openshift-cluster?pivots=aro-deploy-az-cli).
 
@@ -250,11 +271,11 @@ The workflow will:
 - Post a comment on PRs with check results
 - Cache Terraform providers for faster runs
 
-See `.github/workflows/pr.yml` for details.
+See `.github/workflows/ci.yml` for details.
 
 ### Available Makefile Targets
 
-- `make help` - Show README
+- `make help` - Print Makefile targets and one-line descriptions
 - `make tfvars` - Create terraform.tfvars from example
 - `make init` - Initialize Terraform
 - `make create` - Create public ARO cluster
@@ -265,6 +286,7 @@ See `.github/workflows/pr.yml` for details.
 - `make login` - Log into ARO cluster (requires cluster to be deployed)
 - `make destroy` - Destroy service principal-based cluster (non-interactive, uses -auto-approve)
 - `make destroy-managed-identity` - Destroy managed identity cluster (interactive, with wait/verification)
+- `make destroy-private-managed-identity` - Alias for `make destroy-managed-identity` (private MI teardown is identical)
 - `make destroy-managed-identity.force` - Destroy managed identity cluster (non-interactive, with wait/verification)
 - `make clean` - Remove terraform state and providers
 - `make validate` - Run terraform validate
@@ -352,4 +374,4 @@ Delete managed identity cluster and all resources:
 make destroy-managed-identity.force
 ```
 
-**Why a separate target?** Managed identity clusters use ARM template deployments which have different destroy behavior than native Terraform resources. The separate target ensures proper ordering and verification.
+**Why a separate target?** Destroy order matters (cluster before identities/RBAC). The script targets the AzAPI cluster resource first, then runs a full destroy; it also still recognizes a legacy ARM template resource in state if present.

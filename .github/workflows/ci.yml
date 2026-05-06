@@ -52,6 +52,12 @@ jobs:
           chmod 600 ~/.ssh/id_rsa
           chmod 644 ~/.ssh/id_rsa.pub
 
+      - name: Populate reference trees (managed identity modules)
+        env:
+          REFERENCE_ARO_AZAPI_URL: ${{ vars.REFERENCE_ARO_AZAPI_URL }}
+          REFERENCE_ARO_AZAPI_REF: ${{ vars.REFERENCE_ARO_AZAPI_REF }}
+        run: bash scripts/sync-reference.sh
+
       - name: Run pre-commit checks
         id: pr-checks
         run: make pr

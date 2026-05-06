@@ -18,6 +18,18 @@ terraform {
       source  = "hashicorp/time"
       version = "~>0.9"
     }
+    azapi = {
+      source  = "Azure/azapi"
+      version = "~> 2.4"
+    }
+    azuread = {
+      source  = "hashicorp/azuread"
+      version = "~> 2.53"
+    }
+    tls = {
+      source  = "hashicorp/tls"
+      version = "~> 4.1"
+    }
   }
 }
 
@@ -25,6 +37,13 @@ provider "azurerm" {
   features {}
   subscription_id = var.subscription_id
 }
+
+# Used for managed identity + AzAPI cluster path (deployer credentials / OIDC)
+provider "azapi" {
+  subscription_id = var.subscription_id
+}
+
+provider "azuread" {}
 
 # Installer provider - only needed for service principal deployments
 # For managed identity deployments, ARM template uses current Azure credentials

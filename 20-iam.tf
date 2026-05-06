@@ -11,17 +11,9 @@ resource "terraform_data" "aro_permission_wait" {
   # ensure that we create all of our objects before attempting to apply policies that restrict
   # their creation
   depends_on = [
-    azurerm_subnet.control_plane_subnet,
-    azurerm_subnet.firewall_subnet,
+    module.aro_network,
     azurerm_subnet.jumphost_subnet,
-    azurerm_subnet.machine_subnet,
     azurerm_subnet.private_endpoint_subnet,
-    azurerm_route_table.firewall_rt,
-    azurerm_subnet_route_table_association.firewall_rt_aro_cp_subnet_association,
-    azurerm_subnet_route_table_association.firewall_rt_aro_machine_subnet_association,
-    azurerm_network_security_group.aro,
-    azurerm_subnet_network_security_group_association.control_plane,
-    azurerm_subnet_network_security_group_association.machine
   ]
 }
 
@@ -47,12 +39,12 @@ module "aro_permissions" {
 
   # cluster parameters
   cluster_name           = terraform_data.aro_permission_wait.output.cluster_name
-  vnet                   = azurerm_virtual_network.main.name
-  vnet_resource_group    = azurerm_resource_group.main.name
-  network_security_group = azurerm_network_security_group.aro.name
+  vnet                   = module.aro_network.virtual_network_name
+  vnet_resource_group    = module.aro_network.resource_group_name
+  network_security_group = module.aro_network.network_security_group_name
 
   aro_resource_group = {
-    name   = azurerm_resource_group.main.name
+    name   = module.aro_network.resource_group_name
     create = false
   }
 
@@ -69,11 +61,11 @@ module "aro_permissions" {
 
   # set custom permissions
   nat_gateways = []
-  subnets      = [azurerm_subnet.control_plane_subnet.name, azurerm_subnet.machine_subnet.name]
-  route_tables = var.restrict_egress_traffic ? [azurerm_route_table.firewall_rt[0].name] : []
+  subnets      = [module.aro_network.control_plane_subnet_name, module.aro_network.machine_subnet_name]
+  route_tables = var.restrict_egress_traffic ? [module.aro_network.firewall_route_table_name] : []
 
   # further restrict via policy
-  managed_resource_group   = "${azurerm_resource_group.main.name}-managed"
+  managed_resource_group   = "${module.aro_network.resource_group_name}-managed"
   apply_vnet_policy        = var.apply_restricted_policies
   apply_subnet_policy      = var.apply_restricted_policies
   apply_route_table_policy = var.apply_restricted_policies
@@ -89,42 +81,71 @@ module "aro_permissions" {
   tenant_id       = data.azurerm_client_config.current.tenant_id
 }
 
-# Managed Identity Permissions Module (when managed identities are enabled)
-# Simplified module with explicit role assignments - no loops or complex count logic
-# NOTE: This module is only used when enable_managed_identities = true
-# NOTE: depends_on cluster ensures cluster is deleted FIRST during destroy (reverse dependency order)
-module "aro_managed_identity_permissions" {
+# Managed identity path: reference stack (workload identity + built-in ARO RBAC)
+# See reference/aro-azapi — cluster is created via modules/aro-cluster-azapi in 50-cluster.tf
+module "aro_mi_identities" {
   count = var.enable_managed_identities ? 1 : 0
 
-  source = "./modules/aro-managed-identity-permissions"
+  source = "./reference/aro-azapi/modules/managed_identity"
 
-  cluster_name           = terraform_data.aro_permission_wait.output.cluster_name
-  vnet                   = azurerm_virtual_network.main.name
-  vnet_resource_group    = azurerm_resource_group.main.name
-  network_security_group = azurerm_network_security_group.aro.name
+  location            = var.location
+  resource_group_name = module.aro_network.resource_group_name
+  identity_names      = local.mi_identity_azure_names
 
-  aro_resource_group = {
-    name   = azurerm_resource_group.main.name
-    create = false
-  }
+  depends_on = [terraform_data.aro_permission_wait]
+}
 
-  # set custom permissions
-  nat_gateways = []
-  subnets      = [azurerm_subnet.control_plane_subnet.name, azurerm_subnet.machine_subnet.name]
-  route_tables = var.restrict_egress_traffic ? [azurerm_route_table.firewall_rt[0].name] : []
+moved {
+  from = module.aro_mi_rbac
+  to   = module.aro_mi_rbac[0]
+}
 
-  # use custom roles with minimal permissions
-  minimal_network_role = "${var.cluster_name}-network"
+module "aro_mi_rbac" {
+  count = var.enable_managed_identities && var.mi_use_builtin_operator_roles ? 1 : 0
 
-  # explicitly set location, subscription id and tenant id
-  location        = var.location
-  subscription_id = data.azurerm_client_config.current.subscription_id
-  tenant_id       = data.azurerm_client_config.current.tenant_id
+  source = "./reference/aro-azapi/modules/aro_role_assignments"
 
-  # apply tags to all managed identities
-  tags = var.tags
+  aro_vnet_id                        = module.aro_network.virtual_network_id
+  control_plane_subnet_id            = module.aro_network.control_plane_subnet_id
+  compute_subnet_id                  = module.aro_network.machine_subnet_id
+  identity_principal_ids             = module.aro_mi_identities[0].identity_principal_ids
+  aro_rp_object_id                   = data.azuread_service_principal.aro_rp.object_id
+  route_table_id                     = module.aro_network.firewall_route_table_id
+  create_route_table_role_assignment = var.restrict_egress_traffic
+  nsg_id                             = module.aro_network.network_security_group_id
+  create_nsg_role_assignment         = true
 
-  enabled = true
+  depends_on = [module.aro_mi_identities]
+}
+
+# Legacy-style MI RBAC (Network Contributor or mi_minimal_network_role custom roles + cluster MSI operator wiring).
+# Optional alternative when mi_use_builtin_operator_roles is false.
+module "aro_mi_rbac_legacy_network" {
+  count = var.enable_managed_identities && !var.mi_use_builtin_operator_roles ? 1 : 0
+
+  source = "./modules/aro-mi-rbac-legacy-network"
+
+  cluster_name          = var.cluster_name
+  subscription_id       = data.azurerm_client_config.current.subscription_id
+  aro_resource_group_id = module.aro_network.resource_group_id
+  vnet_id               = module.aro_network.virtual_network_id
+  subnet_ids = toset([
+    module.aro_network.control_plane_subnet_id,
+    module.aro_network.machine_subnet_id,
+  ])
+  network_security_group_id = module.aro_network.network_security_group_id
+  route_table_ids = (
+    var.restrict_egress_traffic && module.aro_network.firewall_route_table_id != null
+    ? [module.aro_network.firewall_route_table_id]
+    : []
+  )
+  nat_gateway_ids        = []
+  minimal_network_role   = var.mi_minimal_network_role
+  aro_rp_object_id       = data.azuread_service_principal.aro_rp.object_id
+  identity_principal_ids = module.aro_mi_identities[0].identity_principal_ids
+  identity_resource_ids  = module.aro_mi_identities[0].identity_resource_ids
+
+  depends_on = [module.aro_mi_identities]
 }
 
 #
