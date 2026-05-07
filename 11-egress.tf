@@ -26,7 +26,7 @@ resource "azurerm_public_ip" "firewall_ip" {
   resource_group_name = azurerm_resource_group.main.name
   allocation_method   = "Static"
   sku                 = "Standard"
-  tags                = var.tags
+  tags                = local.tags
 
 }
 
@@ -37,6 +37,7 @@ resource "azurerm_firewall" "firewall" {
   resource_group_name = azurerm_resource_group.main.name
   sku_name            = "AZFW_VNet"
   sku_tier            = "Standard"
+  tags                = local.tags
 
   ip_configuration {
     name                 = "${local.name_prefix}-fw-ip-config"
@@ -60,7 +61,7 @@ resource "azurerm_route_table" "firewall_rt" {
     next_hop_in_ip_address = azurerm_firewall.firewall[0].ip_configuration[0].private_ip_address
   }
 
-  tags = var.tags
+  tags = local.tags
 
 }
 

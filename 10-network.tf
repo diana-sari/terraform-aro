@@ -1,7 +1,7 @@
 resource "azurerm_resource_group" "main" {
   name     = "${local.name_prefix}-rg"
   location = var.location
-  tags     = var.tags
+  tags     = local.tags
 }
 
 resource "azurerm_virtual_network" "main" {
@@ -9,7 +9,7 @@ resource "azurerm_virtual_network" "main" {
   location            = azurerm_resource_group.main.location
   resource_group_name = azurerm_resource_group.main.name
   address_space       = [var.aro_virtual_network_cidr_block]
-  tags                = var.tags
+  tags                = local.tags
 }
 
 resource "azurerm_subnet" "control_plane_subnet" {
@@ -43,7 +43,7 @@ resource "azurerm_network_security_group" "aro" {
   name                = "${local.name_prefix}-nsg"
   location            = azurerm_resource_group.main.location
   resource_group_name = azurerm_resource_group.main.name
-  tags                = var.tags
+  tags                = local.tags
 }
 
 // TODO: Security hardening for private clusters

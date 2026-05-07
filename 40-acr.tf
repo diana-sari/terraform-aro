@@ -16,6 +16,7 @@ resource "azurerm_private_dns_zone" "dns" {
   count               = var.acr_private ? 1 : 0
   name                = "privatelink.azurecr.io"
   resource_group_name = azurerm_resource_group.main.name
+  tags                = local.tags
 }
 
 resource "azurerm_private_dns_zone_virtual_network_link" "dns_link" {
@@ -25,6 +26,7 @@ resource "azurerm_private_dns_zone_virtual_network_link" "dns_link" {
   private_dns_zone_name = azurerm_private_dns_zone.dns[0].name
   virtual_network_id    = azurerm_virtual_network.main.id
   registration_enabled  = false
+  tags                  = local.tags
 }
 
 resource "random_string" "acr" {
@@ -43,6 +45,7 @@ resource "azurerm_container_registry" "acr" {
   sku                           = "Premium"
   admin_enabled                 = true
   public_network_access_enabled = false
+  tags                          = local.tags
 }
 
 resource "azurerm_private_endpoint" "acr" {
@@ -51,6 +54,7 @@ resource "azurerm_private_endpoint" "acr" {
   location            = azurerm_resource_group.main.location
   resource_group_name = azurerm_resource_group.main.name
   subnet_id           = azurerm_subnet.private_endpoint_subnet[0].id
+  tags                = local.tags
 
   private_dns_zone_group {
     name = "acr-zonegroup"

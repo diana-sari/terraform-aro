@@ -23,7 +23,7 @@ resource "azurerm_redhat_openshift_cluster" "cluster" {
   name                = var.cluster_name
   location            = azurerm_resource_group.main.location
   resource_group_name = azurerm_resource_group.main.name
-  tags                = var.tags
+  tags                = local.tags
 
   lifecycle {
     # Ensure cluster is replaced before dependent resources during updates
@@ -198,7 +198,7 @@ resource "azurerm_resource_group_template_deployment" "cluster_managed_identity"
       value = local.managed_identity_principal_ids["machine-api"]
     }
     tags = {
-      value = var.tags
+      value = local.tags
     }
   })
 

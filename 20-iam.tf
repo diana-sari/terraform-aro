@@ -122,7 +122,7 @@ module "aro_managed_identity_permissions" {
   tenant_id       = data.azurerm_client_config.current.tenant_id
 
   # apply tags to all managed identities
-  tags = var.tags
+  tags = local.tags
 
   enabled = true
 }

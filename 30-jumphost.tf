@@ -17,7 +17,7 @@ resource "azurerm_public_ip" "jumphost_pip" {
   location            = azurerm_resource_group.main.location
   allocation_method   = "Static"
 
-  tags = var.tags
+  tags = local.tags
 }
 
 resource "azurerm_network_interface" "jumphost_nic" {
@@ -34,7 +34,7 @@ resource "azurerm_network_interface" "jumphost_nic" {
     public_ip_address_id          = azurerm_public_ip.jumphost_pip[0].id
   }
 
-  tags = var.tags
+  tags = local.tags
 }
 
 resource "azurerm_network_security_group" "jumphost_nsg" {
@@ -55,7 +55,7 @@ resource "azurerm_network_security_group" "jumphost_nsg" {
     destination_address_prefix = "*"
   }
 
-  tags = var.tags
+  tags = local.tags
 }
 
 resource "azurerm_network_interface_security_group_association" "jumphost_association" {
@@ -78,7 +78,7 @@ resource "azurerm_linux_virtual_machine" "jumphost_vm" {
 
   admin_ssh_key {
     username   = "aro"
-    public_key = file(var.jumphost_ssh_public_key_path)
+    public_key = file(pathexpand(var.jumphost_ssh_public_key_path))
   }
 
   os_disk {
@@ -98,7 +98,7 @@ resource "azurerm_linux_virtual_machine" "jumphost_vm" {
       type        = "ssh"
       host        = azurerm_public_ip.jumphost_pip[0].ip_address
       user        = "aro"
-      private_key = file(var.jumphost_ssh_private_key_path)
+      private_key = file(pathexpand(var.jumphost_ssh_private_key_path))
     }
     inline = [
       "sudo dnf install telnet wget bash-completion -y",
@@ -110,5 +110,5 @@ resource "azurerm_linux_virtual_machine" "jumphost_vm" {
     ]
   }
 
-  tags = var.tags
+  tags = local.tags
 }
