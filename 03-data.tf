@@ -2,6 +2,10 @@
 #
 # External data sources used to fetch dynamic values
 
+data "azuread_service_principal" "aro_rp" {
+  display_name = "Azure Red Hat OpenShift RP"
+}
+
 # Get the latest available ARO version for the specified location
 # This is only executed when aro_version variable is not provided (null or empty)
 # Using count to conditionally create this data source

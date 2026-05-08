@@ -29,9 +29,28 @@ locals {
   aro_version = var.aro_version != null && var.aro_version != "" ? var.aro_version : data.external.aro_latest_version[0].result.version
 }
 
-# Managed identity resource IDs (when enable_managed_identities = true)
-# These reference the managed identities created by the aro-managed-identity-permissions module
+# Azure resource names for reference/managed_identity (prefixed; API keys for platformWorkloadIdentities are mi_operator_api_keys)
 locals {
-  managed_identity_ids           = var.enable_managed_identities ? module.aro_managed_identity_permissions[0].managed_identity_ids : {}
-  managed_identity_principal_ids = var.enable_managed_identities ? module.aro_managed_identity_permissions[0].managed_identity_principal_ids : {}
+  mi_operator_api_keys = {
+    cloud_controller_manager = "cloud-controller-manager"
+    ingress                  = "ingress"
+    machine_api              = "machine-api"
+    disk_csi_driver          = "disk-csi-driver"
+    cloud_network_config     = "cloud-network-config"
+    image_registry           = "image-registry"
+    file_csi_driver          = "file-csi-driver"
+    aro_operator             = "aro-operator"
+    cluster_msi              = "cluster"
+  }
+  mi_identity_azure_names = {
+    for k, short in local.mi_operator_api_keys : k => "${var.cluster_name}-${short}"
+  }
+}
+
+locals {
+  # Keys must match ARO platformWorkloadIdentities contract (short operator names)
+  mi_platform_workload_identities = var.enable_managed_identities ? {
+    for k, v in module.aro_mi_identities[0].identity_resource_ids : local.mi_operator_api_keys[k] => v
+    if k != "cluster_msi"
+  } : {}
 }

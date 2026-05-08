@@ -176,6 +176,17 @@ resource "azurerm_role_assignment" "resource_provider_vnet" {
   principal_id         = data.azuread_service_principal.aro_resource_provider.object_id
 }
 
+# ARO RP permission checks are evaluated on each subnet ARM ID. With minimal_network_role, the
+# VNet-scoped custom role does not include subnets/* actions; mirror cluster_vnet_subnets.
+resource "azurerm_role_assignment" "resource_provider_subnets" {
+  for_each = toset(local.subnet_ids)
+
+  scope                = each.value
+  role_definition_id   = local.has_custom_network_role ? azurerm_role_definition.subnet[0].role_definition_resource_id : null
+  role_definition_name = local.has_custom_network_role ? null : "Network Contributor"
+  principal_id         = data.azuread_service_principal.aro_resource_provider.object_id
+}
+
 resource "azurerm_role_assignment" "resource_provider_route_tables" {
   count = length(local.route_table_ids)
 
