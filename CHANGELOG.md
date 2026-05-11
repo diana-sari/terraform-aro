@@ -8,18 +8,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- ARO Managed Identities support (preview feature)
-  - New `enable_managed_identities` variable to enable managed identity deployment
-  - ARM template deployment (`templates/aro-cluster-managed-identity.json`) for managed identity clusters
-  - Conditional cluster deployment: uses ARM template when managed identities enabled, Terraform resource otherwise
-  - aro-permissions module outputs for managed identity resource IDs and principal IDs
-  - Updated outputs to support both service principal and managed identity deployments
-  - Documentation for managed identities feature (README.md, DESIGN.md)
+- Managed identity RBAC choice: `mi_use_builtin_operator_roles` (default `true`) uses `modules/aro-mi-rbac`; set to `false` to use `modules/aro-mi-rbac-legacy-network` (Network Contributor or optional scoped roles via `mi_minimal_network_role`, plus cluster MSI Managed Identity Operator wiring, aligned with the legacy `aro-managed-identity-permissions` model). State migration: `moved` from `module.aro_mi_rbac` to `module.aro_mi_rbac[0]` when staying on the built-in path.
+- Community and tooling scaffolding: `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md` (Contributor Covenant 2.1), `SECURITY.md`, `.editorconfig`, optional `Dockerfile` / `.dockerignore`, expanded `.gitignore`, and README links for license and contributing.
+- GitHub Actions workflow path `.github/workflows/ci.yml` (same behavior as the former `pr.yml`).
+- Managed identity ARO cluster path uses **AzAPI** (`modules/aro-cluster-azapi`) with vendored modules `modules/aro-managed-identity` (user-assigned identity creation + federated credential wiring) and `modules/aro-mi-rbac` (built-in ARO operator RBAC).
+- Providers: `Azure/azapi` (~> 2.4), root `azuread` (~> 2.53, aligned with `modules/aro-permissions`).
+- `outbound_type` variable is passed through to the AzAPI cluster module (parity with the service-principal `azurerm_redhat_openshift_cluster` path).
 
 ### Changed
-- `azurerm_redhat_openshift_cluster` resource is now conditional (count = 0 when managed identities enabled)
-- Cluster deployment method switches based on `enable_managed_identities` variable
-- Outputs now handle both deployment methods transparently
+- **Service principal IAM (`20-iam.tf`):** stop passing `minimal_network_role` / `minimal_aro_role` into `module.aro_permissions`; use Azure built-in **Network Contributor** on network objects and **Contributor** on the cluster resource group (Microsoft ARO tutorial / verify-permissions posture). Removes custom scoped role definitions for the default SP path.
+- **Vendored MI modules:** `modules/aro-managed-identity` and `modules/aro-mi-rbac` are now committed in this repo; the `reference/aro-azapi` gitignored tree, `make reference-sync`, `make reference-check`, and the CI sync step have been removed.
+- **Licensing:** Root license file is `LICENSE` (Apache License 2.0 text); `LICENSE.txt` removed so links match common GitHub conventions (`README.md`, `CONTRIBUTING.md`).
+- **Jumphost SSH (private clusters):** `jumphost_ssh_public_key_path` and `jumphost_ssh_private_key_path` now default to `null`; when both stay unset, Terraform generates an ED25519 keypair (`tls_private_key`), uses it for `remote-exec`, and publishes `jumphost_ssh_private_key_openssh` / `jumphost_ssh_public_key_openssh` outputs—avoiding passphrase-protected `~/.ssh/id_rsa`. To keep the prior behavior (host keys under `~/.ssh`), set both path variables explicitly. Paths use `pathexpand`; bring-your-own private keys must be unencrypted—passphrase-protected keys remain unsupported by provisioners.
+- **Networking:** Optional Azure Firewall and UDR egress resources moved from root `11-egress.tf` into `modules/aro-network/egress.tf`, toggled from the root via `egress_traffic_restricted` / `firewall_subnet_cidr_block` module arguments (mapped from `restrict_egress_traffic` and `aro_firewall_subnet_cidr_block`). Root `10-network.tf` includes `moved` blocks to migrate existing state without replace.
+- **Documentation:** `AGENTS.md` again includes a Terraform ARO **project supplement** after the Keel rule table (Keel covers generic Terraform/Git/agent rules; the supplement holds Azure/ARO/repo-only guidance). `.cursorrules` trimmed to point at DESIGN, Keel, and that supplement instead of duplicating them. README notes default Terraform-managed jumphost SSH keys/sensitive outputs and MI RBAC toggles (`mi_use_builtin_operator_roles`, `mi_minimal_network_role`). DESIGN and PLAN headers refreshed; DESIGN File Organization lists `02-locals.tf`, `03-data.tf`, `90-outputs.tf`, `modules/aro-network`, and corrects Naming vs Tagging subsection numbering.
+- **Breaking (managed identity):** Replaced `module.aro_managed_identity_permissions` and `azurerm_resource_group_template_deployment.cluster_managed_identity` with reference modules plus `module.aro_cluster_azapi`. Existing state must drop the old resources and apply the new stack (see migration note below).
+- `azurerm_redhat_openshift_cluster` remains for service principal mode only (`enable_managed_identities = false`).
+- Outputs for MI clusters read from `module.aro_cluster_azapi` (console/API URLs and optional API/ingress IPs from AzAPI exports).
+- `make destroy` / `scripts/destroy-managed-identity.sh` target the AzAPI cluster resource; legacy ARM template destroy is still detected if present in state.
+
+### Removed
+- Managed identity cluster provisioning via ARM template parameters in root `50-cluster.tf` (template file may still exist on disk but is no longer referenced).
+
+### Migration
+- If state contains `azurerm_resource_group_template_deployment.cluster_managed_identity`, run `terraform state rm` on that address (after deleting the cluster if needed), then `terraform apply` to create the new modules. Green-field applies need no action.
+
+### Fixed
+- **`make destroy`:** the MI-cluster guard used `bash -c '... grep -qE 'pattern' ...'`, so the inner `'` ended the `-c` string early and `/bin/sh` tried to run state addresses as commands (`command not found`). Replaced with a single subshell group and `grep -F` on literal state list strings.
+- **`modules/aro-permissions` (service-principal path):** grant the ARO resource provider the same subnet-scoped network role as the cluster service principal when `minimal_network_role` is set. Azure returns `InvalidResourceProviderPermissions` on the control-plane subnet when the RP only had the VNet-scoped custom role (no `subnets/*` actions). New `azurerm_role_assignment.resource_provider_subnets` mirrors `cluster_vnet_subnets`.
+- `reference/aro-azapi/modules/managed_identity`: `cluster_msi_role_assignments` used a hand-built `role_definition_id` string that did not stabilize against Azure/normalized refreshes (`role_definition_id` → known-after-apply, forcing perpetual replacement). Align with sibling RBAC wiring: **`role_definition_name = "Azure Red Hat OpenShift Federated Credential"`**, explicit **`principal_type = "ServicePrincipal"`**, **`skip_service_principal_aad_check = true`**. Added a **`random_uuid` keeper bump** (`role_assignment_authoring`) so migration uses new assignment GUIDs—a **replacement** ARM allows—instead of reusing old GUIDs and hitting **"doesn't support update"**. Expect assignment **replacement** once when upgrading stacks created with the older author style.
+- `make pr` / `make test`: run Checkov on this repo’s Terraform while skipping the vendored AVM reference tree (`reference/terraform-azurerm-avm-res-redhatopenshift-openshiftcluster`), which is upstream example code and not this project’s contract surface.
+- Remove unused managed-identity local maps in `02-locals.tf` so `tflint` (unused declarations) passes in `make pr` / CI.
+- Plan-time validation: `outbound_type = "UserDefinedRouting"` now requires `restrict_egress_traffic = true` so route table and RBAC stay consistent with this stack.
+- `scripts/destroy-managed-identity.sh`: detect AzAPI cluster in state without BSD `grep -c` zero-match exit issues.
+- Documentation: AzAPI `ignore_changes` behavior for MI clusters; deprecation banner on `modules/aro-managed-identity-permissions` README.
 
 ## [1.0.0] - 2024-12-01
 

@@ -73,6 +73,7 @@ variable "restrict_egress_traffic" {
   description = <<EOF
   Enable egress traffic restriction via Azure Firewall for private ARO clusters.
   When enabled, creates an Azure Firewall and routes all egress traffic through it.
+  Required when outbound_type is UserDefinedRouting (enforced by variable validation).
   Recommended for production deployments. Default: false (permissive for development/example use)
   EOF
 }
@@ -152,6 +153,13 @@ variable "outbound_type" {
     condition     = contains(["Loadbalancer", "UserDefinedRouting"], var.outbound_type)
     error_message = "Invalid 'outbound_type'. Only 'Loadbalancer' or 'UserDefinedRouting' are allowed."
   }
+
+  validation {
+    condition = (
+      var.outbound_type != "UserDefinedRouting" || var.restrict_egress_traffic
+    )
+    error_message = "When outbound_type is UserDefinedRouting, restrict_egress_traffic must be true: this stack only wires UDR via the Azure Firewall route table created when restrict_egress_traffic is enabled."
+  }
 }
 
 variable "subscription_id" {
@@ -220,24 +228,63 @@ variable "apply_restricted_policies" {
 
 variable "jumphost_ssh_public_key_path" {
   type        = string
-  default     = "~/.ssh/id_rsa.pub"
-  description = "Path to the SSH public key file for jumphost VM access. Default: ~/.ssh/id_rsa.pub. For CI/CD, set to a dummy file path or create a temporary key."
+  default     = null
+  nullable    = true
+  description = <<-EOT
+  Path to the SSH **public** key for the jumphost admin user (~/.ssh-compatible path; `pathexpand` applies).
+  When null together with `jumphost_ssh_private_key_path`, Terraform generates an ED25519 keypair (no passphrase)
+  for the jumphost and stores the private material in Terraform state (`terraform output jumphost_ssh_private_key_pem`).
+  Provide both paths to use your own keys (required if your existing key uses a passphrase, since provisioners cannot use passphrases).
+  EOT
 }
 
 variable "jumphost_ssh_private_key_path" {
   type        = string
-  default     = "~/.ssh/id_rsa"
-  description = "Path to the SSH private key file for jumphost VM access. Default: ~/.ssh/id_rsa. For CI/CD, set to a dummy file path or create a temporary key."
+  default     = null
+  nullable    = true
+  description = <<-EOT
+  Path to the SSH **private** key matching `jumphost_ssh_public_key_path`, used only by the jumphost `remote-exec` provisioner.
+  Must be unencrypted — passphrase-protected keys are not supported. When null together with `jumphost_ssh_public_key_path`,
+  Terraform generates keys (see `jumphost_ssh_public_key_path`).
+  EOT
+
+  validation {
+    condition     = (var.jumphost_ssh_public_key_path == null) == (var.jumphost_ssh_private_key_path == null)
+    error_message = "Set both jumphost_ssh_public_key_path and jumphost_ssh_private_key_path, or omit both (null) for Terraform-generated credentials."
+  }
 }
 
 variable "enable_managed_identities" {
   type        = bool
   default     = false
   description = <<EOF
-  Enable Azure Red Hat OpenShift managed identities (preview feature).
-  When enabled, the cluster uses user-assigned managed identities instead of service principals.
-  This feature is currently in tech preview and requires ARM template deployment.
-  The aro-permissions module will create 9 managed identities when this is enabled.
-  Default: false (uses service principals)
+  Enable Azure Red Hat OpenShift with platform workload identities (managed identities).
+  When true, the root stack uses reference/aro-azapi modules (managed identities + RBAC) and
+  creates the cluster via AzAPI (modules/aro-cluster-azapi) instead of azurerm_redhat_openshift_cluster.
+  Default: false (service principal path via modules/aro-permissions and azurerm cluster resource).
   EOF
+}
+
+variable "mi_use_builtin_operator_roles" {
+  type        = bool
+  default     = true
+  description = <<-EOT
+    When enable_managed_identities is true, choose how platform workload identities receive Azure RBAC:
+    true (default) — built-in ARO operator roles via reference/aro-azapi/modules/aro_role_assignments (Microsoft-aligned).
+    false — legacy-style Network Contributor (or optional scoped custom roles via mi_minimal_network_role) plus
+    Managed Identity Operator from cluster MSI to other platform identities (modules/aro-mi-rbac-legacy-network).
+    Ignored when enable_managed_identities is false. Switching between modes replaces RBAC assignments; plan carefully.
+  EOT
+}
+
+variable "mi_minimal_network_role" {
+  type        = string
+  default     = null
+  description = <<-EOT
+    When enable_managed_identities is true and mi_use_builtin_operator_roles is false, set to a non-empty prefix
+    (for example matching your naming convention) to create custom network role definitions instead of assigning
+    built-in Network Contributor on the VNet, subnets, NSG, route tables, and NAT gateways. When null in that mode,
+    built-in Network Contributor is used on those scopes (same as leaving minimal_network_role unset in the legacy
+    modules/aro-managed-identity-permissions module). Ignored when mi_use_builtin_operator_roles is true.
+  EOT
 }

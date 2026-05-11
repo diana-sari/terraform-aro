@@ -1,122 +1,112 @@
-resource "azurerm_resource_group" "main" {
-  name     = "${local.name_prefix}-rg"
-  location = var.location
-  tags     = var.tags
+# Core ARO virtual network, subnets, and NSG (resource group + VNet live in modules/aro-network)
+
+module "aro_network" {
+  source = "./modules/aro-network"
+
+  name_prefix                    = local.name_prefix
+  location                       = var.location
+  tags                           = var.tags
+  aro_virtual_network_cidr_block = var.aro_virtual_network_cidr_block
+  aro_control_subnet_cidr_block  = var.aro_control_subnet_cidr_block
+  aro_machine_subnet_cidr_block  = var.aro_machine_subnet_cidr_block
+  enable_managed_identities      = var.enable_managed_identities
+  egress_traffic_restricted      = var.restrict_egress_traffic
+  firewall_subnet_cidr_block     = var.aro_firewall_subnet_cidr_block
 }
 
-resource "azurerm_virtual_network" "main" {
-  name                = "${local.name_prefix}-vnet"
-  location            = azurerm_resource_group.main.location
-  resource_group_name = azurerm_resource_group.main.name
-  address_space       = [var.aro_virtual_network_cidr_block]
-  tags                = var.tags
+# State migration for existing deployments (resources were previously at root)
+moved {
+  from = azurerm_resource_group.main
+  to   = module.aro_network.azurerm_resource_group.main
 }
 
-resource "azurerm_subnet" "control_plane_subnet" {
-  name                 = "${local.name_prefix}-cp-subnet"
-  resource_group_name  = azurerm_resource_group.main.name
-  virtual_network_name = azurerm_virtual_network.main.name
-  address_prefixes     = [var.aro_control_subnet_cidr_block]
-
-  # ARO requirement: Disable private endpoint and private link service network policies
-  # private_endpoint_network_policies     = "Disabled"
-  # private_link_service_network_policies_enabled = false
-  private_link_service_network_policies_enabled = false
-
-  service_endpoints = ["Microsoft.Storage", "Microsoft.ContainerRegistry"]
+moved {
+  from = azurerm_virtual_network.main
+  to   = module.aro_network.azurerm_virtual_network.main
 }
 
-resource "azurerm_subnet" "machine_subnet" {
-  name                 = "${local.name_prefix}-machine-subnet"
-  resource_group_name  = azurerm_resource_group.main.name
-  virtual_network_name = azurerm_virtual_network.main.name
-  address_prefixes     = [var.aro_machine_subnet_cidr_block]
-
-  # ARO requirement: Disable private endpoint and private link service network policies
-  # private_endpoint_network_policies     = "Disabled"
-  # private_link_service_network_policies_enabled = false
-
-  service_endpoints = ["Microsoft.Storage", "Microsoft.ContainerRegistry"]
+moved {
+  from = azurerm_subnet.control_plane_subnet
+  to   = module.aro_network.azurerm_subnet.control_plane_subnet
 }
 
-resource "azurerm_network_security_group" "aro" {
-  name                = "${local.name_prefix}-nsg"
-  location            = azurerm_resource_group.main.location
-  resource_group_name = azurerm_resource_group.main.name
-  tags                = var.tags
+moved {
+  from = azurerm_subnet.machine_subnet
+  to   = module.aro_network.azurerm_subnet.machine_subnet
 }
 
-// TODO: Security hardening for private clusters
-//       Current: Permissive NSG rules allow access from 0.0.0.0/0 (anywhere)
-//       For production: Restrict source_address_prefix to specific IP ranges or VNet CIDR blocks
-//       Rationale: Private clusters should only accept traffic from trusted sources
-//       See DESIGN.md "Production Hardening Required" section for details
-resource "azurerm_network_security_rule" "aro_inbound_api" {
-  name                        = "${local.name_prefix}-inbound-api"
-  network_security_group_name = azurerm_network_security_group.aro.name
-  resource_group_name         = azurerm_resource_group.main.name
-  priority                    = 120
-  direction                   = "Inbound"
-  access                      = "Allow"
-  protocol                    = "Tcp"
-  source_port_range           = "*"
-  destination_port_range      = "6443"
-  source_address_prefix       = "0.0.0.0/0"
-  destination_address_prefix  = "*"
+moved {
+  from = azurerm_network_security_group.aro
+  to   = module.aro_network.azurerm_network_security_group.aro
 }
 
-// TODO: Security hardening for private clusters
-//       Current: Permissive NSG rules allow HTTP access from 0.0.0.0/0 (anywhere)
-//       For production: Restrict source_address_prefix to specific IP ranges or VNet CIDR blocks
-//       Rationale: Private clusters should only accept traffic from trusted sources
-//       See DESIGN.md "Production Hardening Required" section for details
-resource "azurerm_network_security_rule" "aro_inbound_http" {
-  name                        = "${local.name_prefix}-inbound-http"
-  network_security_group_name = azurerm_network_security_group.aro.name
-  resource_group_name         = azurerm_resource_group.main.name
-  priority                    = 500
-  direction                   = "Inbound"
-  access                      = "Allow"
-  protocol                    = "Tcp"
-  source_port_range           = "*"
-  destination_port_range      = "80"
-  source_address_prefix       = "0.0.0.0/0"
-  destination_address_prefix  = "*"
+moved {
+  from = azurerm_network_security_rule.aro_inbound_api
+  to   = module.aro_network.azurerm_network_security_rule.aro_inbound_api
 }
 
-// TODO: Security hardening for private clusters
-//       Current: Permissive NSG rules allow HTTPS access from 0.0.0.0/0 (anywhere)
-//       For production: Restrict source_address_prefix to specific IP ranges or VNet CIDR blocks
-//       Rationale: Private clusters should only accept traffic from trusted sources
-//       See DESIGN.md "Production Hardening Required" section for details
-resource "azurerm_network_security_rule" "aro_inbound_https" {
-  name                        = "${local.name_prefix}-inbound-https"
-  network_security_group_name = azurerm_network_security_group.aro.name
-  resource_group_name         = azurerm_resource_group.main.name
-  priority                    = 501
-  direction                   = "Inbound"
-  access                      = "Allow"
-  protocol                    = "Tcp"
-  source_port_range           = "*"
-  destination_port_range      = "443"
-  source_address_prefix       = "0.0.0.0/0"
-  destination_address_prefix  = "*"
+moved {
+  from = azurerm_network_security_rule.aro_inbound_http
+  to   = module.aro_network.azurerm_network_security_rule.aro_inbound_http
 }
 
-# NSG associations are only created for service principal deployments
-# For managed identity deployments, subnets must NOT have NSGs attached (ARO requirement)
-# TODO: Investigate NSG support for managed identity clusters - currently NSGs cannot be attached to subnets
-#       See: https://learn.microsoft.com/en-us/azure/openshift/howto-create-openshift-cluster?pivots=aro-deploy-az-arm-template
-resource "azurerm_subnet_network_security_group_association" "control_plane" {
-  count = var.enable_managed_identities ? 0 : 1
-
-  subnet_id                 = azurerm_subnet.control_plane_subnet.id
-  network_security_group_id = azurerm_network_security_group.aro.id
+moved {
+  from = azurerm_network_security_rule.aro_inbound_https
+  to   = module.aro_network.azurerm_network_security_rule.aro_inbound_https
 }
 
-resource "azurerm_subnet_network_security_group_association" "machine" {
-  count = var.enable_managed_identities ? 0 : 1
+moved {
+  from = azurerm_subnet_network_security_group_association.control_plane[0]
+  to   = module.aro_network.azurerm_subnet_network_security_group_association.control_plane[0]
+}
 
-  subnet_id                 = azurerm_subnet.machine_subnet.id
-  network_security_group_id = azurerm_network_security_group.aro.id
+moved {
+  from = azurerm_subnet_network_security_group_association.machine[0]
+  to   = module.aro_network.azurerm_subnet_network_security_group_association.machine[0]
+}
+
+# Egress / Azure Firewall (previously root 11-egress.tf)
+moved {
+  from = azurerm_subnet.firewall_subnet[0]
+  to   = module.aro_network.azurerm_subnet.firewall_subnet[0]
+}
+
+moved {
+  from = azurerm_public_ip.firewall_ip[0]
+  to   = module.aro_network.azurerm_public_ip.firewall_ip[0]
+}
+
+moved {
+  from = azurerm_firewall.firewall[0]
+  to   = module.aro_network.azurerm_firewall.firewall[0]
+}
+
+moved {
+  from = azurerm_route_table.firewall_rt[0]
+  to   = module.aro_network.azurerm_route_table.firewall_rt[0]
+}
+
+moved {
+  from = azurerm_firewall_network_rule_collection.firewall_network_rules[0]
+  to   = module.aro_network.azurerm_firewall_network_rule_collection.firewall_network_rules[0]
+}
+
+moved {
+  from = azurerm_firewall_application_rule_collection.firewall_app_rules_aro[0]
+  to   = module.aro_network.azurerm_firewall_application_rule_collection.firewall_app_rules_aro[0]
+}
+
+moved {
+  from = azurerm_firewall_application_rule_collection.firewall_app_rules_docker[0]
+  to   = module.aro_network.azurerm_firewall_application_rule_collection.firewall_app_rules_docker[0]
+}
+
+moved {
+  from = azurerm_subnet_route_table_association.firewall_rt_aro_cp_subnet_association[0]
+  to   = module.aro_network.azurerm_subnet_route_table_association.firewall_rt_aro_cp_subnet_association[0]
+}
+
+moved {
+  from = azurerm_subnet_route_table_association.firewall_rt_aro_machine_subnet_association[0]
+  to   = module.aro_network.azurerm_subnet_route_table_association.firewall_rt_aro_machine_subnet_association[0]
 }

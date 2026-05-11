@@ -2,15 +2,14 @@
 
 **Project:** Terraform ARO Cluster Deployment
 **Version:** 1.0.0
-**Last Updated:** 2024-12-01
+**Last Updated:** 2026-05-06
 
 Keep this file updated as work progresses. Reference this file to understand current work and next steps.
 
 ## Current Focus
 
-**Task:** MOBB RULES adoption - Gap analysis implementation
-**Started:** 2024-12-01
-**Status:** Completed
+**Task:** Managed identities (AzAPI) path, modular networking (`modules/aro-network`), CI/docs alignment  
+**Status:** See [CHANGELOG.md](CHANGELOG.md) `[Unreleased]` for shipped-in-branch changes; cut a numbered release when ready.
 
 ## Next Steps
 
@@ -120,7 +119,7 @@ Keep this file updated as work progresses. Reference this file to understand cur
 
 - [x] **Task #12:** Reorganize files with numeric prefixes
   - Apply MOBB RULES file organization with numeric prefixes
-  - Renamed files: `00-terraform.tf`, `01-variables.tf`, `10-network.tf`, `11-egress.tf`, `20-iam.tf`, `30-jumphost.tf`, `40-acr.tf`, `50-cluster.tf`
+  - Renamed files: `00-terraform.tf`, `01-variables.tf`, `10-network.tf`, `20-iam.tf`, `30-jumphost.tf`, `40-acr.tf`, `50-cluster.tf` (egress/firewall: `modules/aro-network/egress.tf`)
   - Verified Terraform initialization works with new file names
   - Priority: Medium
   - Completed: 2024-12-01
@@ -175,8 +174,8 @@ Keep this file updated as work progresses. Reference this file to understand cur
   - Add context and rationale to TODO comments
   - Link to design decisions or issues where appropriate
   - Update TODOs in `10-network.tf` (lockdown for private clusters)
-  - Update TODO in `11-egress.tf` (restrict firewall network rules)
-  - Update TODO in `11-egress.tf` (hub-spoke conversion - align with DESIGN.md non-goals)
+  - Update TODO in `modules/aro-network/egress.tf` (restrict firewall network rules)
+  - Update TODO in `modules/aro-network/egress.tf` (hub-spoke conversion - align with DESIGN.md non-goals)
   - Priority: Low
   - Completed: 2024-12-01
   - Depends on: Task #1

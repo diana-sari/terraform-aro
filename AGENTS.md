@@ -1,372 +1,135 @@
-# Terraform ARO - Best Practices
+# AGENTS.md
 
-**Project:** Terraform ARO Cluster Deployment
-**Last Updated:** 2024-12-01
+<!-- keel:start - DO NOT EDIT between these markers -->
+## Rules
 
-This document compiles best practices from MOBB RULES (Managed OpenShift Black Belts - ReUsable Library for Expert Systems) specifically for this Terraform ARO deployment project.
+| Rule | Globs | Always Apply |
+|------|-------|--------------|
+| agent-behavior | `["**/*"]` | true |
+| base | `["**/*"]` | true |
+| markdown | `["**/*.md"]` | false |
+| scaffolding | `["**/*"]` | true |
+| terraform | `["**/*.tf", "**/*.tfvars", "**/*.tfvars.json"]` | false |
 
-## Project Context
+## Rule Details
 
-- **Cloud:** Azure
-- **Platform:** ARO (Azure Red Hat OpenShift)
-- **Languages:** Terraform (HCL)
-- **Design:** See [DESIGN.md](./DESIGN.md) for project intent and architecture
-- **Plan:** See [PLAN.md](./PLAN.md) for implementation tasks and progress
+### agent-behavior
+- **Description:** Universal behavioral safety rules for AI agents interacting with live systems
+- **Globs:** `["**/*"]`
+- **File:** `.agents/rules/keel/agent-behavior.md`
 
-## Philosophy
+### base
+- **Description:** Global coding standards that apply to all files and languages
+- **Globs:** `["**/*"]`
+- **File:** `.agents/rules/keel/base.md`
 
-Following MOBB RULES core principles:
+### markdown
+- **Description:** Markdown writing conventions for .md files
+- **Globs:** `["**/*.md"]`
+- **File:** `.agents/rules/keel/markdown.md`
 
-- **Simplicity over Complexity:** Favor straightforward, maintainable solutions over clever abstractions
-- **WET over DRY:** Write Everything Twice before abstracting; duplication improves clarity
-- **Context-Aware Application:** Apply rules based on project purpose (example/demo/dev/staging/production)
+### scaffolding
+- **Description:** Interactive guidance for essential project scaffolding files
+- **Globs:** `["**/*"]`
+- **File:** `.agents/rules/keel/scaffolding.md`
 
-## Design Alignment
+### terraform
+- **Description:** Best practices and rules for Terraform infrastructure as code
+- **Globs:** `["**/*.tf", "**/*.tfvars", "**/*.tfvars.json"]`
+- **File:** `.agents/rules/keel/terraform.md`
+<!-- keel:end -->
 
-This project follows the design outlined in DESIGN.md. All practices below support the project's intent:
+## Terraform ARO — project supplement
 
-- **Primary Purpose:** Example/demo/development tool for deploying ARO clusters
-- **Security Approach:** Permissive defaults with toggleable security features
-- **Design Constraints:** Single-region, single VNet, standard node profiles
-- **Non-Goals:** Multi-region, hub-spoke, custom node pools, monitoring/backup
+**Keel** (table above) supplies generic agent behavior, Git hygiene, Terraform style, markdown, and scaffolding. In **Cursor**, those live under [`.cursor/rules/keel/`](.cursor/rules/keel/); the same text is mirrored under [`.agents/rules/keel/`](.agents/rules/keel/) for other tools. **Everything below** is specific to this Azure ARO Terraform repo and [MOBB](https://github.com/rh-mobb)-style practice—avoid repeating Keel’s generic bullets here.
 
-## Terraform Standards
+### Rule precedence
 
-### File Organization
+1. **[DESIGN.md](DESIGN.md)** — intent, boundaries, security trade-offs (highest).
+2. **This supplement** — layout, identity modes, modules, toggles, Azure/ARO conventions for *this* tree.
+3. **Keel rules** — cross-language and default Terraform guidance.
 
-- **Current Pattern:** Organize with numeric prefixes per MOBB RULES
-  - `00-terraform.tf` - Provider configuration
-  - `01-variables.tf` - Variable definitions
-  - `10-network.tf` - Core networking resources (VNet, subnets, NSGs)
-  - `11-egress.tf` - Firewall and egress control
-  - `20-iam.tf` - Identity and access management
-  - `30-jumphost.tf` - Jumphost VM
-  - `40-acr.tf` - Azure Container Registry
-  - `50-cluster.tf` - ARO cluster resource
+### Project context
 
-- **Status:** ✅ Files organized with numeric prefixes per MOBB RULES standards
-- **Note:** Numeric prefixes help with dependency ordering and logical grouping
+- **Cloud:** Azure · **Platform:** ARO (Azure Red Hat OpenShift) · **IaC:** Terraform.
+- **Purpose:** Example / demo / learning; permissive defaults are intentional—document hardening for anything stricter.
+- **Tasks / roadmap:** [PLAN.md](PLAN.md).
 
-### Variable Definitions
+### Philosophy (MOBB)
 
-- **All variables must have descriptions**
-- **Use appropriate types** (string, number, bool, map, list)
-- **Provide sensible defaults** where appropriate
-- **Use validation blocks** for constrained values
-- **Mark optional variables with `nullable = true`** or `default = null`
+- **Simplicity over complexity** — straightforward modules and files over deep abstraction.
+- **WET over DRY** — some duplication is acceptable for clarity in an example repo.
+- **Context-aware controls** — strictness follows environment (sandbox vs production).
 
-**Current Status:** ✅ All variables have descriptions. Some optional variables use `default = null` (good practice).
+### Uncertain or exploratory requests
 
-### Output Definitions
+When the user sounds unsure—hedging (“maybe”, “I would think”, “probably”), tentative phrasing, or a message framed as an open question—treat that as a signal to **clarify before building**, not as a green light to implement the first interpretation.
 
-- **All outputs must have descriptions**
-- **Document what each output provides**
-- **Include usage examples where helpful**
+- **Restate and refine** — summarize what you understood, ask targeted questions, and narrow scope until the goal is explicit enough to act on.
+- **Raise certainty** — prefer a short alignment step (options, trade-offs, what “done” looks like) over rushing to code or Terraform edits.
+- **Gentle pushback is allowed** — if a different approach is safer, simpler, or better aligned with DESIGN.md or this supplement, say so briefly and offer the alternative.
 
-**Current Status:** ✅ All outputs have descriptions.
+Do not skip this step just to appear fast; wrong certainty costs more than a brief clarification.
 
-### Resource Naming
+### Root module layout
 
-- **Use consistent naming patterns**
-- **Use `local.name_prefix` for resource prefixes**
-- **Follow Azure naming conventions** (lowercase, hyphens)
+Numbered root files (order-friendly):
 
-**Current Pattern:**
-- Resources: `${local.name_prefix}-<resource-type>-<identifier>`
-- Example: `my-aro-cluster-rg`, `my-aro-cluster-vnet`
+| Prefix | Focus |
+|--------|--------|
+| `00-terraform.tf` | Providers / Terraform block |
+| `01-variables.tf` | Variables |
+| `02-locals.tf` | Locals |
+| `03-data.tf` | Data sources |
+| `10-network.tf` | `module.aro_network`: VNet, subnets, NSGs; optional firewall + UDR in `modules/aro-network/egress.tf` when `restrict_egress_traffic` is true |
+| `20-iam.tf` | Identities and RBAC |
+| `30-jumphost.tf` | Optional jumphost |
+| `40-acr.tf` | ACR |
+| `50-cluster.tf` | ARO cluster (path depends on identity mode) |
+| `90-outputs.tf` | Outputs |
 
-**Status:** ✅ Consistent naming pattern in use.
+Submodules live under `modules/` and `reference/`; see DESIGN.md for boundaries.
 
-### Code Style
+### Naming and tags
 
-- **Use `terraform fmt`** to ensure consistent formatting
-- **Run `terraform validate`** before committing
-- **Use meaningful comments** for complex logic
-- **Document TODOs** with context
+- Resources: **`${local.name_prefix}-<resource-type>-<identifier>`** (Azure-style lowercase hyphenated names).
+- Tags: keep **`environment`**, **`owner`**, **`ManagedBy`** consistent; defaults are permissive—see variables and DESIGN.md.
 
-**Current Status:**
-- Code is generally well-formatted
-- TODO comments present (documented in DESIGN.md)
-- Some comments could be expanded
+### Identity modes (do not confuse paths)
 
-### Provider Configuration
+- **Service principal (default):** `azurerm_redhat_openshift_cluster` plus vendored [**`modules/aro-permissions`**](modules/aro-permissions/) (terraform-aro-permissions v0.2.1). Root `20-iam.tf` uses built-in **Network Contributor** and **Contributor** (Microsoft tutorial posture); optional custom minimal roles are still supported by the module if you pass `minimal_network_role` / `minimal_aro_role` there.
+- **Managed identities (preview):** **`reference/aro-azapi`** modules (directory is **gitignored**—populate with `make reference-sync` using `REFERENCE_ARO_AZAPI_URL`; CI uses the GitHub Actions variable of the same name) plus [**`modules/aro-cluster-azapi`**](modules/aro-cluster-azapi/) (AzAPI). RBAC defaults to built-in ARO operator roles (`mi_use_builtin_operator_roles`, default true); optional legacy-style network RBAC lives in [**`modules/aro-mi-rbac-legacy-network`**](modules/aro-mi-rbac-legacy-network/). Prefer this stack for new MI work; [**`modules/aro-managed-identity-permissions`**](modules/aro-managed-identity-permissions/) is legacy—see its README if you touch old state.
 
-- **Pin provider versions** to avoid unexpected changes
-- **Use provider aliases** when multiple configurations needed
-- **Document provider requirements**
+### Azure networking and ARO
 
-**Current Status:** ✅ Provider version pinned (`~>4.21.1`), aliases used appropriately.
+- Dedicated control plane / worker subnets, service endpoints (e.g. Storage, ACR), private endpoint policies off on ARO subnets where required.
+- **Outbound:** `LoadBalancer` vs `UserDefinedRouting` must stay consistent with `restrict_egress_traffic` and DESIGN.md (firewall + route tables when restricted).
+- **Private API/ingress:** optional jumphost path; document connectivity when changing NSGs or SSH sources.
 
-## Azure Standards
+### Security posture (example repo)
 
-### Resource Naming
+- NSGs and firewall rules may be broad for learning; call out production tightening in PRs when you touch them.
+- Toggles: `restrict_egress_traffic`, `apply_restricted_policies` (see variables + DESIGN.md).
 
-- **Use lowercase with hyphens** (Azure standard)
-- **Keep names under 64 characters** where possible
-- **Use consistent prefixes** for resource groups
+### Makefile and CI
 
-**Current Pattern:** ✅ Follows Azure naming conventions.
+- **`reference/`** — `terraform init` requires `./reference/aro-azapi` (managed identity module sources). Clone via **`make reference-sync`** (`REFERENCE_ARO_AZAPI_URL`); GitHub Actions sets repository/org variable **`REFERENCE_ARO_AZAPI_URL`** before `make pr`.
+- **`make pr`** — `terraform validate`, `fmt -check`, optional **tflint** / **checkov** (matches automation).
+- **`make test`** — broader local checks, optional **`terraform plan`** when Azure CLI is logged in.
+- **GitHub Actions:** [`.github/workflows/ci.yml`](.github/workflows/ci.yml) on push and PR to `main` (runs `make pr`).
 
-### Tagging
+For variable/output descriptions, formatting, pinning, and validation habits, follow the **Keel Terraform** rule—this file does not duplicate that list.
 
-- **Apply tags consistently** to all resources
-- **Include required tags:** `environment`, `owner`, `ManagedBy`
-- **Allow tag customization** via variables
+### Versioning and changelog
 
-**Current Tags:**
-- `environment = "development"` (default)
-- `owner = "your@email.address"` (default)
-- `ManagedBy = "Terraform"` (added per MOBB RULES)
+- **SemVer**; **CHANGELOG.md** [Keep a Changelog](https://keepachangelog.com/); release steps are summarized in README / PLAN as needed.
 
-**Status:** ✅ Tags applied consistently.
+### Doc map
 
-### Security Groups
-
-- **Document security considerations** when using permissive rules
-- **Provide examples** for production hardening
-- **Make security configurable** via variables
-
-**Current Status:**
-- ⚠️ NSG rules are permissive (0.0.0.0/0) - documented in DESIGN.md
-- ⚠️ TODO comments indicate need for lockdown
-- ✅ Security is toggleable (`restrict_egress_traffic`, `apply_restricted_policies`)
-
-### Service Principals
-
-- **Use minimal permissions** (principle of least privilege)
-- **Separate installer and cluster service principals**
-- **Use custom roles** with minimal required permissions
-
-**Current Status:** ✅ Uses vendored `terraform-aro-permissions` module (v0.2.1) with minimal permissions. Module located at `./modules/aro-permissions/`.
-
-## ARO Platform Standards
-
-### Cluster Configuration
-
-- **Support both public and private clusters**
-- **Use appropriate outbound types** (LoadBalancer vs UserDefinedRouting)
-- **Configure network profiles** correctly (pod CIDR, service CIDR)
-- **Enable preconfigured NSG** for ARO-managed security groups
-
-**Current Status:** ✅ Supports public/private, configurable outbound types.
-
-### Network Requirements
-
-- **Use dedicated subnets** for control plane and workers
-- **Configure service endpoints** (Storage, ContainerRegistry)
-- **Disable private endpoint network policies** on ARO subnets
-- **Use appropriate CIDR blocks** (non-overlapping)
-
-**Current Status:** ✅ Proper subnet configuration, service endpoints configured.
-
-### Egress Traffic Control
-
-- **Support egress restriction** via Azure Firewall
-- **Configure route tables** for User Defined Routing
-- **Document required firewall rules** for ARO operation
-- **Make egress restriction toggleable**
-
-**Current Status:**
-- ✅ Egress restriction supported and toggleable
-- ⚠️ Firewall rules are permissive (allow-all) - documented in DESIGN.md
-- ✅ Application rules configured for ARO requirements
-
-### Private Cluster Access
-
-- **Provide jumphost** for private cluster access
-- **Pre-install OpenShift CLI tools** on jumphost
-- **Document connectivity procedures**
-
-**Current Status:** ✅ Jumphost created conditionally with pre-installed tools.
-
-## Context-Aware Application
-
-### Project Context: Example/Demo/Development
-
-This project serves as an example/demo tool. Security standards are applied contextually:
-
-**Current Security Approach:**
-- ✅ **Permissive defaults** - Prioritize usability and learning
-- ✅ **Toggleable security** - Allow enabling strict controls
-- ✅ **Documented trade-offs** - Clear guidance on production hardening
-- ✅ **Context-aware** - Relaxed for examples, strict for production
-
-**Security Features:**
-- `restrict_egress_traffic` - Toggle egress restriction (default: false)
-- `apply_restricted_policies` - Toggle Azure Policy restrictions (default: false)
-- NSG rules - Permissive by default, documented for hardening
-
-**Production Hardening Required:**
-- Restrict NSG source addresses
-- Enable strict firewall rules
-- Enable Azure Policy restrictions
-- Restrict jumphost SSH access
-- Review all security group rules
-
-### Security Documentation
-
-**Current State:**
-- Security considerations documented in DESIGN.md
-- README includes usage instructions
-- TODO comments indicate security improvements needed
-
-**Best Practice:**
-- ⚠️ **Security Note:** This example uses permissive security defaults for development and learning purposes. For production deployments:
-  - Set `restrict_egress_traffic = true`
-  - Set `apply_restricted_policies = true`
-  - Restrict NSG source addresses to specific IP ranges
-  - Review and restrict firewall rules
-  - Implement network security best practices
-
-## Project-Specific Rules
-
-### Existing Patterns (Preserved)
-
-1. **File Organization:** Flat structure by resource type (acceptable for project size)
-2. **Naming Convention:** `${local.name_prefix}-<resource-type>-<identifier>`
-3. **Conditional Resources:** Use `count` for optional components
-4. **Service Principal Management:** Vendored module (`./modules/aro-permissions/` - terraform-aro-permissions v0.2.1)
-5. **Tagging:** Default tags with override capability
-
-### Legacy Exceptions
-
-**None identified.** All code follows current best practices or has documented TODOs for improvement.
-
-### Deviations from MOBB RULES
-
-**None significant.** Project aligns with MOBB RULES standards. Minor deviations:
-
-1. **File Organization:** Uses flat structure instead of numeric prefixes
-   - **Rationale:** Project size doesn't warrant numeric prefixes
-   - **Status:** Acceptable per MOBB RULES (simplicity over complexity)
-
-2. **Security Defaults:** Permissive security rules
-   - **Rationale:** Example/demo context - documented and toggleable
-   - **Status:** Aligns with context-aware application principle
-
-## Rule Hierarchy
-
-Priority order for applying rules:
-
-1. **DESIGN.md intent** (highest priority - defines project boundaries)
-2. **Project context** (example/dev/staging/prod) - determines strictness
-3. **Project-specific rules** (this section)
-4. **Platform rules** (ARO standards)
-5. **Cloud rules** (Azure standards)
-6. **Language rules** (Terraform standards - foundational)
-
-## Makefile Standards
-
-### Required Targets
-
-- `help` - Show available targets
-- `init` - Initialize Terraform
-- `validate` - Run `terraform validate`
-- `fmt` - Check formatting
-- `fmt-fix` - Fix formatting
-- `check` - Run validation and formatting checks
-- `lint` - Run linting (if available)
-
-**Current Status:** ✅ Makefile includes standard targets.
-
-## Versioning Standards
-
-### Semantic Versioning
-
-This project follows [Semantic Versioning (SemVer)](https://semver.org/) format: `MAJOR.MINOR.PATCH`
-
-- **MAJOR** (1.0.0): Breaking changes (renamed variables, changed types, removed features)
-- **MINOR** (0.2.0): New features (new variables/outputs, backward-compatible additions)
-- **PATCH** (0.1.1): Bug fixes (fixes, documentation updates)
-
-### Version Management
-
-- **CHANGELOG.md**: Documents all changes following Keep a Changelog format
-- **Git Tags**: Use annotated tags for releases (`git tag -a v0.1.0 -m "Release message"`)
-- **PLAN.md**: Tracks project version
-- **GitHub Releases**: Optional but recommended for distribution
-
-### Release Process
-
-When releasing a new version:
-
-1. Run `make test` to ensure all tests pass
-2. Update CHANGELOG.md - move `[Unreleased]` content to version section
-3. Update version links in CHANGELOG.md
-4. Update PLAN.md version if applicable
-5. Commit changes: `git commit -m "chore: prepare release vX.Y.Z"`
-6. Create annotated tag: `git tag -a vX.Y.Z -m "Release vX.Y.Z: Description"`
-7. Push commits and tag: `git push origin main && git push origin vX.Y.Z`
-8. Create GitHub Release (optional) with CHANGELOG content
-
-**Pre-1.0.0 Note:** During `0.x.x` phase, breaking changes can be in MINOR versions. Move to `1.0.0` when API is stable.
-
-## Documentation Standards
-
-### Required Files
-
-- ✅ **DESIGN.md** - Project design and architecture
-- ✅ **PLAN.md** - Implementation tasks and progress
-- ✅ **CHANGELOG.md** - Change history (Keep a Changelog format)
-- ✅ **README.md** - Usage instructions
-- ✅ **AGENTS.md** - This file (project-specific best practices)
-- ✅ **.cursorrules** - AI agent instructions
-
-### Documentation Best Practices
-
-- **Keep documentation current** with code changes
-- **Document security considerations** clearly
-- **Include examples** for common use cases
-- **Reference external documentation** where appropriate
-- **Update CHANGELOG.md** for all notable changes
-
-## Testing Standards
-
-### Current State
-
-- ⚠️ **No automated tests** currently implemented
-- ✅ **Manual validation** via `terraform validate` and `terraform fmt`
-- 📋 **Planned:** Add Terraform validation tests (see PLAN.md)
-
-### Best Practices
-
-- Run `terraform validate` before committing
-- Run `terraform fmt -check` in CI/CD
-- Add validation tests for critical modules
-- Test both public and private cluster scenarios
-
-## CI/CD Standards
-
-### Current State
-
-- ⚠️ **No CI/CD pipeline** currently configured
-- 📋 **Planned:** Add GitHub Actions workflow (see PLAN.md)
-
-### Best Practices (When Implemented)
-
-- Run `terraform validate` on pull requests
-- Run `terraform fmt -check` on pull requests
-- Run `terraform plan` to verify changes
-- Require approvals for production deployments
-
-## Summary
-
-This project follows MOBB RULES best practices with context-aware application:
-
-- ✅ **Terraform standards** - Proper file organization, variables, outputs, naming
-- ✅ **Azure standards** - Naming conventions, tagging, security groups
-- ✅ **ARO standards** - Cluster configuration, networking, egress control
-- ✅ **Context-aware** - Permissive defaults for examples, documented production hardening
-- ✅ **Documentation** - All mandatory files present and current
-- ✅ **Design alignment** - Practices support DESIGN.md intent
-
-**Key Principles Applied:**
-- Simplicity over complexity
-- WET over DRY (appropriate duplication for clarity)
-- Context-aware application (example/demo context with production guidance)
-
-**Areas for Future Improvement:**
-- Add automated tests
-- Add CI/CD pipeline
-- Implement security hardening examples
-- Expand documentation with more use cases
+| File | Role |
+|------|------|
+| [DESIGN.md](DESIGN.md) | Architecture and constraints |
+| [PLAN.md](PLAN.md) | Tasks |
+| [README.md](README.md) | Usage |
+| [CHANGELOG.md](CHANGELOG.md) | Release notes |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Contributor flow |

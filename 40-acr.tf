@@ -5,8 +5,8 @@ resource "azurerm_subnet" "private_endpoint_subnet" {
   # checkov:skip=CKV2_AZURE_31:Private endpoint subnet uses private endpoints for ACR; NSG not applicable for private endpoints
   count                             = var.acr_private ? 1 : 0
   name                              = "PrivateEndpoint-subnet"
-  resource_group_name               = azurerm_resource_group.main.name
-  virtual_network_name              = azurerm_virtual_network.main.name
+  resource_group_name               = module.aro_network.resource_group_name
+  virtual_network_name              = module.aro_network.virtual_network_name
   address_prefixes                  = [var.aro_private_endpoint_cidr_block]
   private_endpoint_network_policies = "Disabled"
   #private_link_service_network_policies_enabled = false # To verify
@@ -15,15 +15,15 @@ resource "azurerm_subnet" "private_endpoint_subnet" {
 resource "azurerm_private_dns_zone" "dns" {
   count               = var.acr_private ? 1 : 0
   name                = "privatelink.azurecr.io"
-  resource_group_name = azurerm_resource_group.main.name
+  resource_group_name = module.aro_network.resource_group_name
 }
 
 resource "azurerm_private_dns_zone_virtual_network_link" "dns_link" {
   count                 = var.acr_private ? 1 : 0
   name                  = "acr-dns-link"
-  resource_group_name   = azurerm_resource_group.main.name
+  resource_group_name   = module.aro_network.resource_group_name
   private_dns_zone_name = azurerm_private_dns_zone.dns[0].name
-  virtual_network_id    = azurerm_virtual_network.main.id
+  virtual_network_id    = module.aro_network.virtual_network_id
   registration_enabled  = false
 }
 
@@ -38,8 +38,8 @@ resource "random_string" "acr" {
 resource "azurerm_container_registry" "acr" {
   count                         = var.acr_private ? 1 : 0
   name                          = "acraro${random_string.acr.result}"
-  location                      = azurerm_resource_group.main.location
-  resource_group_name           = azurerm_resource_group.main.name
+  location                      = module.aro_network.location
+  resource_group_name           = module.aro_network.resource_group_name
   sku                           = "Premium"
   admin_enabled                 = true
   public_network_access_enabled = false
@@ -48,8 +48,8 @@ resource "azurerm_container_registry" "acr" {
 resource "azurerm_private_endpoint" "acr" {
   count               = var.acr_private ? 1 : 0
   name                = "acr-pe"
-  location            = azurerm_resource_group.main.location
-  resource_group_name = azurerm_resource_group.main.name
+  location            = module.aro_network.location
+  resource_group_name = module.aro_network.resource_group_name
   subnet_id           = azurerm_subnet.private_endpoint_subnet[0].id
 
   private_dns_zone_group {

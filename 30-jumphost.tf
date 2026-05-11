@@ -1,9 +1,33 @@
+locals {
+  jumphost_enabled = var.api_server_profile == "Private" || var.ingress_profile == "Private"
+  # When unset, provision an ED25519 key pair so remote-exec can use an unencrypted private key from state (no passphrase support).
+  jumphost_ssh_use_generated = (
+    local.jumphost_enabled && var.jumphost_ssh_public_key_path == null && var.jumphost_ssh_private_key_path == null
+  )
+  jumphost_ssh_public_key_content = (
+    local.jumphost_ssh_use_generated ? tls_private_key.jumphost_ssh[0].public_key_openssh :
+    local.jumphost_enabled ? trimspace(file(pathexpand(var.jumphost_ssh_public_key_path))) :
+    ""
+  )
+  # Provisioner SSH client needs plaintext key material; unwrap sensitive generated key only for connections.
+  jumphost_ssh_private_key_content = (
+    local.jumphost_ssh_use_generated ? nonsensitive(tls_private_key.jumphost_ssh[0].private_key_openssh) :
+    local.jumphost_enabled ? trimspace(file(pathexpand(var.jumphost_ssh_private_key_path))) :
+    ""
+  )
+}
+
+resource "tls_private_key" "jumphost_ssh" {
+  count     = local.jumphost_ssh_use_generated ? 1 : 0
+  algorithm = "ED25519"
+}
+
 resource "azurerm_subnet" "jumphost_subnet" {
   # checkov:skip=CKV2_AZURE_31:Jumphost subnet uses NSG via network_interface_security_group_association; direct subnet NSG not required
   count                = var.api_server_profile == "Private" || var.ingress_profile == "Private" ? 1 : 0
   name                 = "${local.name_prefix}-jumphost-subnet"
-  resource_group_name  = azurerm_resource_group.main.name
-  virtual_network_name = azurerm_virtual_network.main.name
+  resource_group_name  = module.aro_network.resource_group_name
+  virtual_network_name = module.aro_network.virtual_network_name
   address_prefixes     = [var.aro_jumphost_subnet_cidr_block]
   service_endpoints    = ["Microsoft.ContainerRegistry"]
 }
@@ -13,8 +37,8 @@ resource "azurerm_subnet" "jumphost_subnet" {
 resource "azurerm_public_ip" "jumphost_pip" {
   count               = var.api_server_profile == "Private" || var.ingress_profile == "Private" ? 1 : 0
   name                = "${local.name_prefix}-jumphost-pip"
-  resource_group_name = azurerm_resource_group.main.name
-  location            = azurerm_resource_group.main.location
+  resource_group_name = module.aro_network.resource_group_name
+  location            = module.aro_network.location
   allocation_method   = "Static"
 
   tags = var.tags
@@ -24,8 +48,8 @@ resource "azurerm_network_interface" "jumphost_nic" {
   # checkov:skip=CKV_AZURE_119:Jumphost requires public IP for SSH access to private ARO clusters; security controlled via NSG
   count               = var.api_server_profile == "Private" || var.ingress_profile == "Private" ? 1 : 0
   name                = "${local.name_prefix}-jumphost-nic"
-  resource_group_name = azurerm_resource_group.main.name
-  location            = azurerm_resource_group.main.location
+  resource_group_name = module.aro_network.resource_group_name
+  location            = module.aro_network.location
 
   ip_configuration {
     name                          = "internal"
@@ -40,8 +64,8 @@ resource "azurerm_network_interface" "jumphost_nic" {
 resource "azurerm_network_security_group" "jumphost_nsg" {
   count               = var.api_server_profile == "Private" || var.ingress_profile == "Private" ? 1 : 0
   name                = "${local.name_prefix}-jumphost-nsg"
-  resource_group_name = azurerm_resource_group.main.name
-  location            = azurerm_resource_group.main.location
+  resource_group_name = module.aro_network.resource_group_name
+  location            = module.aro_network.location
 
   security_rule {
     name                       = "allow_ssh_sg"
@@ -67,8 +91,8 @@ resource "azurerm_network_interface_security_group_association" "jumphost_associ
 resource "azurerm_linux_virtual_machine" "jumphost_vm" {
   count               = var.api_server_profile == "Private" || var.ingress_profile == "Private" ? 1 : 0
   name                = "${local.name_prefix}-jumphost"
-  resource_group_name = azurerm_resource_group.main.name
-  location            = azurerm_resource_group.main.location
+  resource_group_name = module.aro_network.resource_group_name
+  location            = module.aro_network.location
   size                = "Standard_D2s_v3"
   admin_username      = "aro"
 
@@ -78,7 +102,7 @@ resource "azurerm_linux_virtual_machine" "jumphost_vm" {
 
   admin_ssh_key {
     username   = "aro"
-    public_key = file(var.jumphost_ssh_public_key_path)
+    public_key = local.jumphost_ssh_public_key_content
   }
 
   os_disk {
@@ -98,7 +122,7 @@ resource "azurerm_linux_virtual_machine" "jumphost_vm" {
       type        = "ssh"
       host        = azurerm_public_ip.jumphost_pip[0].ip_address
       user        = "aro"
-      private_key = file(var.jumphost_ssh_private_key_path)
+      private_key = local.jumphost_ssh_private_key_content
     }
     inline = [
       "sudo dnf install telnet wget bash-completion -y",

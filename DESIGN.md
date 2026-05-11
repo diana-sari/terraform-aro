@@ -1,8 +1,8 @@
 # Project Design Document
 
 **Project:** Terraform ARO Cluster Deployment
-**Version:** 0.1.0
-**Last Updated:** 2024-12-01
+**Version:** 1.0.0
+**Last Updated:** 2026-05-06
 
 ## Project Intent
 
@@ -17,10 +17,10 @@ This project provides Terraform infrastructure-as-code for deploying Azure Red H
    - Configurable control plane and worker node profiles
    - Supports public and private API/ingress visibility
    - Conditional deployment: Service Principal (default) or Managed Identities (preview)
-   - Managed identities use ARM template deployment (`azurerm_resource_group_template_deployment`)
+   - Managed identities use AzAPI (`module.aro_cluster_azapi`) and the `reference/aro-azapi` Terraform modules
 
-2. **Networking** (`10-network.tf`)
-   - Virtual network with CIDR blocks for ARO
+2. **Networking** (`10-network.tf` → `module.aro_network`)
+   - Virtual network with CIDR blocks for ARO (implemented in `modules/aro-network`)
    - Control plane subnet (10.0.0.0/23)
    - Machine/worker subnet (10.0.2.0/23)
    - Network Security Groups (NSGs) with permissive defaults
@@ -30,12 +30,12 @@ This project provides Terraform infrastructure-as-code for deploying Azure Red H
    - Service principal management via vendored `terraform-aro-permissions` module (v0.2.1)
    - Module located at `./modules/aro-permissions/`
    - Installer and cluster service principals (default)
-   - Managed identities support (preview feature, enabled via `enable_managed_identities` variable)
-   - When managed identities enabled: Creates 9 user-assigned managed identities
-   - Minimal permission roles
+   - Managed identities (platform workload identities), enabled via `enable_managed_identities`
+   - When enabled: `reference/aro-azapi` `managed_identity` plus RBAC via default `aro_role_assignments` or optional `modules/aro-mi-rbac-legacy-network` (`mi_use_builtin_operator_roles`)
+   - `modules/aro-managed-identity-permissions` is legacy (see module README for older stacks); new MI deployments use reference RBAC or, when `mi_use_builtin_operator_roles = false`, `modules/aro-mi-rbac-legacy-network`
    - Optional Azure Policy restrictions
 
-4. **Egress Traffic Control** (`11-egress.tf`) - Conditional
+4. **Egress Traffic Control** (`modules/aro-network/egress.tf`) - Conditional
    - Azure Firewall for restricting egress traffic
    - Firewall subnet (10.0.6.0/23)
    - Route tables for User Defined Routing
@@ -110,27 +110,22 @@ This project provides Terraform infrastructure-as-code for deploying Azure Red H
 
 ### 4. Managed Identities Support (Preview)
 
-**Decision:** Support Azure Red Hat OpenShift managed identities via ARM template deployment.
+**Decision:** Support Azure Red Hat OpenShift with platform workload identities using the **reference/aro-azapi** module stack and **AzAPI** for the cluster resource (`Microsoft.RedHatOpenShift/openShiftClusters@2025-07-25`).
 
 **Rationale:**
-- Managed identities provide enhanced security (no credential management)
-- Follows Azure best practices for identity management
-- Required for future-proofing as managed identities become GA
-- Leverages existing aro-permissions module support for managed identities
+- Managed identities avoid long-lived cluster credentials
+- AzAPI exposes the same ARM surface as the portal/CLI while `azurerm_redhat_openshift_cluster` lacks full MI support
+- Reference layout is a known-good wiring (identities, RBAC, ordering, retries)
 
 **Implementation:**
 - Feature flag: `enable_managed_identities` (default: false)
-- When enabled: aro-permissions module creates 9 user-assigned managed identities
-- Cluster deployment uses ARM template (`azurerm_resource_group_template_deployment`)
-- ARM template uses API version `2024-08-12-preview` (required for managed identities)
-- ARM template includes `platformWorkloadIdentityProfile` and `identity` blocks
-- Role assignments between managed identities handled by ARM template
-- Outputs work identically for both service principal and managed identity deployments
+- When enabled: nine user-assigned identities from `reference/aro-azapi/modules/managed_identity`; RBAC defaults to `aro_role_assignments` (`mi_use_builtin_operator_roles = true`) or optionally `modules/aro-mi-rbac-legacy-network` (`mi_use_builtin_operator_roles = false`, with optional `mi_minimal_network_role` for custom network roles); cluster from vendored `modules/aro-cluster-azapi` (adds explicit `outbound_type` vs reference-only visibility logic)
+- Outputs use module outputs for console/API URLs (and IPs when returned on the cluster resource)
 
 **Limitations:**
-- Currently in tech preview (not recommended for production)
-- Requires ARM template deployment (Terraform resource doesn't support it yet)
-- Existing clusters cannot be migrated from service principals to managed identities
+- Platform remains preview/GA per Microsoft product lifecycle; validate for production independently
+- Default MI RBAC uses **built-in** ARO operator roles (broader than the old custom minimal roles in `aro-managed-identity-permissions`); the legacy-style network RBAC path is opt-in and omits per-operator built-in roles (e.g. no subnet Network Contributor for `disk-csi-driver` as in the old module—validate storage operators if you switch modes)
+- Existing clusters cannot be migrated from service principals to managed identities in place
 
 ### 5. File Organization
 
@@ -144,14 +139,17 @@ This project provides Terraform infrastructure-as-code for deploying Azure Red H
 **Structure:**
 - `00-terraform.tf` - Provider configuration
 - `01-variables.tf` - Variable definitions
-- `10-network.tf` - Core networking resources (VNet, subnets, NSGs)
-- `11-egress.tf` - Firewall and egress control
+- `02-locals.tf` - Shared locals (name prefix, tags, wiring)
+- `03-data.tf` - Data sources (for example ARO version discovery)
+- `10-network.tf` - Networking module (`modules/aro-network`: VNet, subnets, NSGs)
+- `modules/aro-network/egress.tf` - Firewall and egress control (optional)
 - `20-iam.tf` - Identity and access management
 - `30-jumphost.tf` - Jumphost VM
 - `40-acr.tf` - Azure Container Registry
-- `50-cluster.tf` - ARO cluster resource
+- `50-cluster.tf` - ARO cluster resource (SP or managed identities path)
+- `90-outputs.tf` - Outputs
 
-### 5. Naming Conventions
+### 6. Naming Conventions
 
 **Decision:** Use consistent naming with `local.name_prefix` (cluster name) as prefix.
 
@@ -164,7 +162,7 @@ This project provides Terraform infrastructure-as-code for deploying Azure Red H
 - Resources: `${local.name_prefix}-<resource-type>-<identifier>`
 - Example: `my-aro-cluster-rg`, `my-aro-cluster-vnet`
 
-### 6. Tagging Strategy
+### 7. Tagging Strategy
 
 **Decision:** Use default tags with environment and owner, allow override via `tags` variable.
 
@@ -190,11 +188,12 @@ This project provides Terraform infrastructure-as-code for deploying Azure Red H
 
 ### Assumptions
 
-1. **SSH Keys:** Jumphost assumes SSH keys exist at `~/.ssh/id_rsa.pub` and `~/.ssh/id_rsa`
-2. **Pull Secret:** Optional Red Hat pull secret for private registries
-3. **Azure CLI:** Users have Azure CLI configured and authenticated
-4. **Terraform State:** State management handled externally (not in scope)
-5. **Resource Group:** Can create or use existing resource group
+1. **`reference/aro-azapi`:** Not tracked in git; must exist locally after `make reference-sync` (`REFERENCE_ARO_AZAPI_URL`) before `terraform init`. Paths under `reference/` match the upstream MI module layout described in README / CONTRIBUTING.
+2. **SSH Keys:** Private clusters create a Terraform-managed ED25519 keypair when `jumphost_ssh_public_key_path` and `jumphost_ssh_private_key_path` are both unset (`null`), with secrets in state and sensitive outputs (`jumphost_ssh_private_key_openssh`). Set **both** paths to use existing keys — the provisioner requires an **unencrypted** private key (no passphrase).
+3. **Pull Secret:** Optional Red Hat pull secret for private registries
+4. **Azure CLI:** Users have Azure CLI configured and authenticated
+5. **Terraform State:** State management handled externally (not in scope)
+6. **Resource Group:** Can create or use existing resource group
 
 ## Non-Goals
 
@@ -210,9 +209,9 @@ This project provides Terraform infrastructure-as-code for deploying Azure Red H
 
 ### Planned Improvements
 
-1. **Hub-Spoke Architecture:** Convert from single VNet to hub-spoke model (noted in `11-egress.tf`)
+1. **Hub-Spoke Architecture:** Convert from single VNet to hub-spoke model (noted in `modules/aro-network/egress.tf`)
 2. **Security Hardening:** Implement restricted NSG rules for private clusters (TODO comments in `10-network.tf`)
-3. **Firewall Rules:** Restrict firewall network rules (TODO in `11-egress.tf`)
+3. **Firewall Rules:** Restrict firewall network rules (TODO in `modules/aro-network/egress.tf`)
 4. **Testing:** Add Terraform validation tests and CI/CD integration
 
 ### Potential Enhancements

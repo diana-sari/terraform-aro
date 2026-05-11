@@ -1,19 +1,37 @@
 .DEFAULT_GOAL := help
 
+# NOTE: Targets that run `terraform plan -out *.plan` then `terraform apply *.plan`
+# lock variable inputs at plan time. Unset TF_VAR_* overrides that conflict before apply,
+# or re-run plan so apply sees the same values (example: TF_VAR_cluster_name unset if you planned with -var cluster_name=...).
+
+
 .PHONY: help
-help:
-	less ./README.md
+help: ## Print summary of Makefile targets (full guide: README.md)
+	@printf '%s\n\n' "Terraform ARO — common targets:"
+	@for mk in $(MAKEFILE_LIST); do \
+	  grep -hE '^[a-zA-Z0-9_.-]+:([^#]|$$).*?## ' "$$mk" 2>/dev/null || true; \
+	done | sort -u | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-32s %s\n", $$1, $$2}'
+	@printf '\n%s\n' "Docs: README.md"
 
 .PHONY: tfvars
-tfvars:
+tfvars: ## Copy terraform.tfvars.example to terraform.tfvars
 	cp ./terraform.tfvars.example terraform.tfvars
 
+.PHONY: locations
+locations: ## Print ARO-supported regions (short names; az + jq; OpenShiftClusters RP)
+	@bash -c '\
+	set -e; \
+	command -v jq >/dev/null 2>&1 || { echo "Error: jq is required (e.g. brew install jq)" >&2; exit 1; }; \
+	aro=$$(az provider show -n Microsoft.RedHatOpenShift --query "resourceTypes[?resourceType=='\''OpenShiftClusters'\''].locations | [0]" -o json) || { echo "Error: az provider show failed. Run az login." >&2; exit 1; }; \
+	loc=$$(az account list-locations -o json) || { echo "Error: az account list-locations failed." >&2; exit 1; }; \
+	echo "$$aro" | jq -r --argjson loc "$$loc" '\''.[] as $$d | ($$loc[] | select(.displayName == $$d) | .name) // empty'\'' | sort -u'
+
 .PHONY: init
-init:
+init: ## Run terraform init -upgrade
 	terraform init -upgrade
 
 .PHONY: create
-create: init
+create: init ## Plan and apply public ARO (subscription from az; cluster name aro-<whoami>)
 	# NOTE: aro_version is optional - latest version will be auto-detected if not provided
 	terraform plan -out aro.plan \
 		-var "subscription_id=$(shell az account show --query id --output tsv)" \
@@ -22,7 +40,7 @@ create: init
 	terraform apply aro.plan
 
 .PHONY: create-private
-create-private: init
+create-private: init ## Plan and apply private API/ingress, UDR egress, public ACR
 	# NOTE: aro_version is optional - latest version will be auto-detected if not provided
 	terraform plan -out aro.plan \
 		-var "cluster_name=aro-$(shell whoami)" \
@@ -36,7 +54,7 @@ create-private: init
 	terraform apply aro.plan
 
 .PHONY: create-private-noegress
-create-private-noegress: init
+create-private-noegress: init ## Plan and apply private cluster without restricted egress
 	# NOTE: aro_version is optional - latest version will be auto-detected if not provided
 	terraform plan -out aro.plan \
 		-var "cluster_name=aro-$(shell whoami)" \
@@ -48,7 +66,7 @@ create-private-noegress: init
 	terraform apply aro.plan
 
 .PHONY: create-managed-identity
-create-managed-identity: init
+create-managed-identity: init ## Plan and apply ARO with managed identities (preview)
 	# NOTE: Deploys ARO cluster with managed identities (preview feature)
 	# NOTE: aro_version is optional - latest version will be auto-detected if not provided
 	terraform plan -out aro.plan \
@@ -59,7 +77,7 @@ create-managed-identity: init
 	terraform apply aro.plan
 
 .PHONY: create-private-managed-identity
-create-private-managed-identity: init
+create-private-managed-identity: init ## Private + managed identities variant
 	# NOTE: Deploys private ARO cluster with managed identities (preview feature)
 	# NOTE: aro_version is optional - latest version will be auto-detected if not provided
 	terraform plan -out aro.plan \
@@ -75,39 +93,46 @@ create-private-managed-identity: init
 	terraform apply aro.plan
 
 .PHONY: delete
-delete: destroy
+delete: destroy ## Alias for destroy
 
 .PHONY: destroy
-destroy:
+destroy: ## Terraform destroy for service-principal clusters (not managed identity)
 	# NOTE: Check if this is a managed identity cluster - if so, use destroy-managed-identity instead
-	@bash -c '\
-	set -e; \
-	if terraform state list 2>/dev/null | grep -q "azurerm_resource_group_template_deployment.cluster_managed_identity"; then \
-		echo "❌ Error: This is a managed identity cluster."; \
-		echo ""; \
-		echo "Managed identity clusters require special destroy handling."; \
-		echo "Please use: make destroy-managed-identity"; \
-		echo ""; \
-		exit 1; \
-	fi; \
-	echo "Destroying ARO cluster resources (service principal)..."; \
-	terraform destroy -auto-approve -var "subscription_id=$$(az account show --query id --output tsv)"'
+	# (Do not nest single quotes inside bash -c '...' — that breaks the Mi-cluster grep and yields "command not found".)
+	@{ \
+		set -e; \
+		mi_state=$$(terraform state list 2>/dev/null || true); \
+		if echo "$$mi_state" | grep -Fq "module.aro_cluster_azapi[0].azapi_resource.aro_cluster" \
+			|| echo "$$mi_state" | grep -Fq "azurerm_resource_group_template_deployment.cluster_managed_identity"; then \
+			echo "❌ Error: This is a managed identity cluster."; \
+			echo ""; \
+			echo "Managed identity clusters require special destroy handling."; \
+			echo "Please use: make destroy-managed-identity"; \
+			echo ""; \
+			exit 1; \
+		fi; \
+		echo "Destroying ARO cluster resources (service principal)..."; \
+		terraform destroy -auto-approve -var "subscription_id=$$(az account show --query id --output tsv)"; \
+	}
 
-.PHONY: destroy-managed-identity
-destroy-managed-identity:
+.PHONY: destroy-managed-identity destroy-private-managed-identity
+destroy-managed-identity: ## Ordered destroy for managed-identity clusters (uses script)
 	# NOTE: Destroy order is critical for managed identity clusters - cluster must be deleted BEFORE modules
 	#       ARM template deployments require explicit wait/verification to prevent network resource destruction conflicts
 	@./scripts/destroy-managed-identity.sh
 
+# Symmetry with create-private-managed-identity: private/public MI teardown is the same script.
+destroy-private-managed-identity: destroy-managed-identity ## Alias for destroy-managed-identity (same for private MI stacks)
+
 
 
 .PHONY: clean
-clean:
+clean: ## Remove local terraform.tfstate* and .terraform*
 	rm -rf terraform.tfstate*
 	rm -rf .terraform*
 
 .PHONY: show_credentials
-show_credentials:
+show_credentials: ## Print API/console URLs and kubeadmin password (requires az + outputs)
 	@bash -c '\
 	set -e; \
 	echo "Retrieving ARO cluster credentials..."; \
@@ -139,7 +164,7 @@ show_credentials:
 	echo "Or use: make login"'
 
 .PHONY: login
-login:
+login: ## oc login as kubeadmin using terraform outputs and az aro list-credentials
 	@bash -c '\
 	set -e; \
 	echo "Logging into ARO cluster..."; \
@@ -167,28 +192,31 @@ login:
 
 # MOBB RULES Standard Targets
 
+.PHONY: build
+build: validate ## IaC has no compile artifact; alias for validate
+
 .PHONY: validate
-validate: init
+validate: init ## terraform validate
 	terraform validate
 
 .PHONY: fmt
-fmt:
+fmt: ## terraform fmt -check -recursive
 	terraform fmt -check -recursive
 
 .PHONY: fmt-fix
-fmt-fix:
+fmt-fix: ## terraform fmt -recursive (write changes)
 	terraform fmt -recursive
 
 .PHONY: check
-check: validate fmt
+check: validate fmt ## validate + fmt check
 
 .PHONY: lint
-lint: check
+lint: check ## Same as check; hook for extra linters
 	@echo "Linting: Running terraform validate and fmt checks"
 	@echo "Note: Additional linting tools can be added here"
 
 .PHONY: test
-test: init
+test: init ## validate, fmt, optional tflint/checkov, terraform plan dry-run
 	@echo "Running full test suite..."
 	@echo "Running Terraform validate..."
 	@terraform validate || { echo "ERROR: Terraform validate failed" >&2; exit 1; }
@@ -209,7 +237,9 @@ test: init
 			echo "  Install with: pip install checkov==$$EXPECTED_VERSION"; \
 		fi; \
 		echo "Running checkov security scan..."; \
-		checkov -d . --framework terraform --quiet || { echo "ERROR: checkov security scan failed" >&2; exit 1; }; \
+		checkov -d . --framework terraform --quiet \
+			--skip-path reference/terraform-azurerm-avm-res-redhatopenshift-openshiftcluster \
+			|| { echo "ERROR: checkov security scan failed" >&2; exit 1; }; \
 	else \
 		echo "⚠ checkov not found (optional - install with: pip install checkov==3.2.495)"; \
 	fi
@@ -226,7 +256,7 @@ test: init
 	@echo "✓ All tests passed!"
 
 .PHONY: pr
-pr: init
+pr: init ## Pre-commit checks (validate, fmt, tflint, checkov; no plan)
 	@echo "Running pre-commit checks..."
 	@echo "Running Terraform validate..."
 	@terraform validate || { echo "ERROR: Terraform validate failed" >&2; exit 1; }
@@ -247,7 +277,9 @@ pr: init
 			echo "  Install with: pip install checkov==$$EXPECTED_VERSION"; \
 		fi; \
 		echo "Running checkov security scan..."; \
-		checkov -d . --framework terraform --quiet || { echo "ERROR: checkov security scan failed" >&2; exit 1; }; \
+		checkov -d . --framework terraform --quiet \
+			--skip-path reference/terraform-azurerm-avm-res-redhatopenshift-openshiftcluster \
+			|| { echo "ERROR: checkov security scan failed" >&2; exit 1; }; \
 	else \
 		echo "⚠ checkov not found (optional - install with: pip install checkov==3.2.495)"; \
 	fi
